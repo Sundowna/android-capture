@@ -58,6 +58,20 @@ class VaultWriter(context: Context, private val tree: Uri) {
         }
     }
 
+    /**
+     * Appends [text] to the end of the existing note at [path] (relative to the vault).
+     * Nothing already in the note is rewritten. Returns false if the note no longer exists.
+     */
+    fun append(path: String, text: String): Boolean {
+        val dirId = findPath(path.substringBeforeLast('/', "")) ?: return false
+        val name = path.substringAfterLast('/')
+        val docId = children(dirId).firstOrNull { it.second == name && !it.third }?.first ?: return false
+        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+        cr.openOutputStream(uri, "wa")?.use { it.write(text.toByteArray()); it.flush() }
+            ?: throw VaultUnavailableException("Cannot write to $name")
+        return true
+    }
+
     /** Removes temp files left behind by an interrupted write. */
     fun cleanupTemp(folder: String) {
         val dirId = findPath(folder) ?: return

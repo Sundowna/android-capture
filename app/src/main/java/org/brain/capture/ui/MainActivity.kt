@@ -138,14 +138,18 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
         }
     }
 
-    fun toggleRecording() {
+    fun toggleRecording(appendTo: String? = null) {
         when {
             phase is Phase.Recording -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
             ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED ->
-                CaptureService.send(ctx, CaptureService.ACTION_START)
+                CaptureService.send(ctx, CaptureService.ACTION_START) {
+                    if (appendTo != null) putExtra(CaptureService.EXTRA_APPEND_TO, appendTo)
+                }
             else -> permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS))
         }
     }
+    val canAppend = !phase.isBusy
+    val onAppend: (HistoryEntry) -> Unit = { e -> e.notePath?.let { toggleRecording(it) } }
 
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -173,7 +177,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
 
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Button(
-                onClick = ::toggleRecording,
+                onClick = { toggleRecording() },
                 enabled = phase is Phase.Recording || !phase.isBusy,
                 shape = CircleShape,
                 modifier = Modifier.size(112.dp).semantics {
@@ -187,7 +191,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             }
         }
 
-        history.firstOrNull()?.let { TranscriptCard(it, title = "Last transcript") }
+        history.firstOrNull()?.let { TranscriptCard(it, "Last transcript", canAppend, onAppend) }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -243,13 +247,13 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
         if (older.isNotEmpty()) {
             Text("Earlier transcripts", style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 8.dp))
-            older.forEach { TranscriptCard(it) }
+            older.forEach { TranscriptCard(it, null, canAppend, onAppend) }
         }
     }
 }
 
 @Composable
-private fun TranscriptCard(entry: HistoryEntry, title: String? = null) {
+private fun TranscriptCard(entry: HistoryEntry, title: String?, canAppend: Boolean, onAppend: (HistoryEntry) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
@@ -269,6 +273,10 @@ private fun TranscriptCard(entry: HistoryEntry, title: String? = null) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
+                if (entry.notePath != null) IconButton(onClick = { onAppend(entry) }, enabled = canAppend,
+                    modifier = Modifier.size(48.dp)) {
+                    Icon(painterResource(R.drawable.ic_mic_add), contentDescription = "Record more for this note")
+                }
                 IconButton(onClick = {
                     // Only the transcript text, none of the timing details.
                     ctx.getSystemService(android.content.ClipboardManager::class.java)

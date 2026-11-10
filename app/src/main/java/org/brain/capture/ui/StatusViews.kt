@@ -59,6 +59,10 @@ fun StatusContent(phase: Phase, level: Float) {
                     Spacer(Modifier.width(10.dp))
                     Text("Recording  %d:%02d".format(s / 60, s % 60), style = MaterialTheme.typography.titleLarge)
                 }
+                phase.appendTo?.let {
+                    Text("Adding to: ${it.substringAfterLast('/').removeSuffix(".md")}",
+                        style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                }
                 LinearProgressIndicator(progress = { level }, modifier = Modifier.fillMaxWidth()
                     .semantics { contentDescription = "Input level" })
             }
@@ -71,7 +75,11 @@ fun StatusContent(phase: Phase, level: Float) {
                 } else Busy("Transcribing…")
             Phase.WritingVault -> Busy("Saving to vault…")
             is Phase.Saved -> {
-                Text(if (phase.warning == null) "✓ Saved" else "Saved, with a warning",
+                Text(when {
+                        phase.warning != null -> "Saved, with a warning"
+                        phase.appended -> "✓ Added to note"
+                        else -> "✓ Saved"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = if (phase.warning == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                 Text(phase.warning ?: phase.notePath, style = MaterialTheme.typography.bodySmall)

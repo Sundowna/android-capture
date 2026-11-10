@@ -7,13 +7,14 @@ import kotlinx.coroutines.flow.asStateFlow
 /** What the capture pipeline is doing right now. Shown in the app, the notification and the logs. */
 sealed interface Phase {
     data object Idle : Phase
-    data class Recording(val startedAtMs: Long) : Phase
+    /** [appendTo] is the vault path of the note this recording will be added to, if any. */
+    data class Recording(val startedAtMs: Long, val appendTo: String? = null) : Phase
     data object SavingAudio : Phase
     data object LoadingModel : Phase
     /** [done] of [total] chunks finished. Progress is counted in real chunks, never estimated. */
     data class Transcribing(val done: Int, val total: Int) : Phase
     data object WritingVault : Phase
-    data class Saved(val notePath: String, val warning: String? = null) : Phase
+    data class Saved(val notePath: String, val warning: String? = null, val appended: Boolean = false) : Phase
     data class Failed(val message: String, val wavPath: String?) : Phase
 }
 

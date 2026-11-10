@@ -53,19 +53,37 @@ object TranscriptHistory {
         load(ctx)
         if (e.transcript.isBlank()) return
         _entries.value = (listOf(e) + _entries.value).take(MAX)
-        val o = JSONObject()
-            .put("at", e.atMs).put("text", e.transcript).put("audio", e.audioSeconds)
-            .put("load", e.modelLoadMs).put("tx", e.transcribeMs).put("chunks", e.chunks)
-            .put("note", e.notePath ?: "")
         val f = file(ctx)
-        f.appendText(o.toString() + "\n")
-        // Keep the file from growing forever.
-        if (_entries.value.size >= MAX && f.length() > 512_000) {
-            f.writeText(_entries.value.asReversed().joinToString("") { h ->
-                JSONObject().put("at", h.atMs).put("text", h.transcript).put("audio", h.audioSeconds)
-                    .put("load", h.modelLoadMs).put("tx", h.transcribeMs).put("chunks", h.chunks)
-                    .put("note", h.notePath ?: "").toString() + "\n"
-            })
-        }
+        f.appendText(json(e))
+        if (_entries.value.size >= MAX && f.length() > 512_000) rewrite(f)
+    }
+
+    /** Adds [more] to the entry for [notePath] and moves it to the top. Returns false if there is none. */
+    @Synchronized
+    fun extend(ctx: Context, notePath: String, more: HistoryEntry): Boolean {
+        load(ctx)
+        val old = _entries.value.firstOrNull { it.notePath == notePath } ?: return false
+        if (more.transcript.isBlank()) return true
+        val merged = old.copy(
+            atMs = more.atMs,
+            transcript = old.transcript + "\n\n" + more.transcript,
+            audioSeconds = old.audioSeconds + more.audioSeconds,
+            modelLoadMs = more.modelLoadMs,
+            transcribeMs = more.transcribeMs,
+            chunks = old.chunks + more.chunks,
+        )
+        _entries.value = listOf(merged) + _entries.value.filter { it !== old }
+        rewrite(file(ctx))
+        return true
+    }
+
+    private fun json(h: HistoryEntry) = JSONObject().put("at", h.atMs).put("text", h.transcript)
+        .put("audio", h.audioSeconds).put("load", h.modelLoadMs).put("tx", h.transcribeMs)
+        .put("chunks", h.chunks).put("note", h.notePath ?: "").toString() + "\n"
+
+    private fun rewrite(f: File) {
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(_entries.value.asReversed().joinToString("") { json(it) })
+        tmp.renameTo(f)
     }
 }

@@ -44,11 +44,13 @@ class VoicePipeline(private val context: Context) {
             // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
             val transcript = if (muted > 0.9) "" else NonSpeech.strip(transcribe(samples, seconds))
             CaptureState.set(Phase.WritingVault)
-            val path = writeToVault(wav, seconds, transcript, warning)
+            val target = appendTarget(wav).takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null }
+            val (path, appended) = writeToVault(wav, seconds, transcript, warning, target)
             wav.delete()
-            CaptureState.set(Phase.Saved(path, warning))
+            appendTarget(wav).delete()
+            CaptureState.set(Phase.Saved(path, warning, appended))
             CaptureState.last.value?.let { r ->
-                TranscriptHistory.add(context, HistoryEntry(
+                val entry = HistoryEntry(
                     atMs = capturedAt(wav).toInstant().toEpochMilli(),
                     transcript = transcript,
                     audioSeconds = seconds,
@@ -56,7 +58,8 @@ class VoicePipeline(private val context: Context) {
                     transcribeMs = r.transcribeMs,
                     chunks = r.chunks,
                     notePath = path,
-                ))
+                )
+                if (!appended || !TranscriptHistory.extend(context, path, entry)) TranscriptHistory.add(context, entry)
             }
         } catch (e: VaultUnavailableException) {
             Log.w(TAG, "Vault unavailable", e)
@@ -91,7 +94,11 @@ class VoicePipeline(private val context: Context) {
         }
     }
 
-    private fun writeToVault(wav: File, seconds: Double, transcript: String, warning: String?): String {
+    /**
+     * Saves the audio, then either appends to the note [appendTo] or creates a new note.
+     * Returns the note's vault path and whether it was an append.
+     */
+    private fun writeToVault(wav: File, seconds: Double, transcript: String, warning: String?, appendTo: String?): Pair<String, Boolean> {
         val tree = prefs.vaultUri ?: throw VaultUnavailableException("No vault folder selected")
         val vault = VaultWriter(context, tree)
         val inbox = prefs.inboxFolder.trim('/')
@@ -104,19 +111,28 @@ class VoicePipeline(private val context: Context) {
         val audioName = vault.write("$inbox/Attachments", NoteBuilder.baseName(at, "Voice", null), "wav") { out ->
             wav.inputStream().use { it.copyTo(out, 1 shl 16) }
         }
+        if (appendTo != null &&
+            vault.append(appendTo, NoteBuilder.appendBlock(at, transcript, audioName, warning))) {
+            return appendTo to true
+        }
+        // The note to add to is gone (renamed, moved or deleted): keep the addition as its own note.
+        val body = if (appendTo == null) transcript
+        else "Addition to [[${appendTo.substringAfterLast('/').removeSuffix(".md")}]]\n\n$transcript"
         val note = NoteBuilder.voiceNote(
             captureId = UUID.randomUUID().toString(),
             at = at,
             durationSec = seconds,
             audioFile = audioName,
-            transcript = transcript,
+            transcript = body,
             model = "whisper-small-int8 (onnx)",
             language = prefs.language,
             warning = warning,
         )
         val noteName = vault.write("$inbox/Voice", base, "md") { it.write(note.toByteArray()) }
-        return "$inbox/Voice/$noteName"
+        return "$inbox/Voice/$noteName" to false
     }
+
+    private fun appendTarget(wav: File) = org.brain.capture.audio.CaptureService.appendTarget(wav)
 
     /** The staging file name holds the recording start time (yyyy-MM-dd_HHmmss). */
     private fun capturedAt(wav: File) = runCatching {

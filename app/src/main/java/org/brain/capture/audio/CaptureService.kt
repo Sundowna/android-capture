@@ -62,7 +62,7 @@ class CaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRecording()
+            ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO))
             ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else if (!CaptureState.isBusy) stopSelf()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
             ACTION_PROCESS_PENDING -> processPending()
@@ -71,14 +71,14 @@ class CaptureService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun startRecording() {
+    private fun startRecording(appendTo: String? = null) {
         if (CaptureState.isBusy) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             CaptureState.set(Phase.Failed("Microphone permission missing", null))
             stopSelf(); return
         }
         val started = System.currentTimeMillis()
-        CaptureState.set(Phase.Recording(started))
+        CaptureState.set(Phase.Recording(started, appendTo))
         startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         vibrate()
@@ -86,6 +86,8 @@ class CaptureService : Service() {
 
         val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
         CaptureState.current(file.path)
+        // Stored next to the recording so an interrupted append still goes to the right note.
+        appendTarget(file).let { if (appendTo != null) it.writeText(appendTo) else it.delete() }
         recordJob = scope.launch(Dispatchers.IO) {
             val ok = runCatching { record(file) }
                 .onFailure { Log.e(TAG, "Recording failed", it) }
@@ -191,7 +193,7 @@ class CaptureService : Service() {
             .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         when (p) {
-            is Phase.Recording -> b.setContentTitle("Recording")
+            is Phase.Recording -> b.setContentTitle(if (p.appendTo != null) "Recording · adding to note" else "Recording")
                 .setUsesChronometer(true).setWhen(p.startedAtMs).setShowWhen(true).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
             Phase.SavingAudio -> b.setContentTitle("Saving recording…").setProgress(0, 0, true).setOngoing(true)
@@ -200,7 +202,11 @@ class CaptureService : Service() {
                 .setContentText(if (p.total > 1) "Part ${p.done + 1} of ${p.total}" else null)
                 .setProgress(p.total, p.done, p.total <= 1).setOngoing(true)
             Phase.WritingVault -> b.setContentTitle("Saving to vault…").setProgress(0, 0, true).setOngoing(true)
-            is Phase.Saved -> b.setContentTitle(if (p.warning != null) "Saved, with a warning" else "✓ Saved")
+            is Phase.Saved -> b.setContentTitle(when {
+                    p.warning != null -> "Saved, with a warning"
+                    p.appended -> "✓ Added to note"
+                    else -> "✓ Saved"
+                })
                 .setContentText(p.warning ?: p.notePath)
                 .setAutoCancel(true).setTimeoutAfter(4000)
             is Phase.Failed -> b.setContentTitle("⚠ ${p.message}")
@@ -240,6 +246,9 @@ class CaptureService : Service() {
         const val ACTION_TOGGLE = "toggle"
         const val ACTION_PROCESS_PENDING = "process_pending"
         const val EXTRA_RETRY = "retry"
+        const val EXTRA_APPEND_TO = "append_to"
+
+        fun appendTarget(wav: File) = File(wav.parentFile, wav.nameWithoutExtension + ".append")
         private val STAMP = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.ROOT)
 
         fun stagingDir(ctx: Context): File = File(ctx.filesDir, "staging").apply { mkdirs() }
