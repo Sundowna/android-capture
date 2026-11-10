@@ -17,4 +17,5 @@ Production voice capture, plus decisions made while testing phase 1.
 Built and unit-tested (20 tests pass); items 1–9 are in the code. Device results so far:
 - 126 s German recording: transcribed in 51 s (6 pieces, split at pauses), Opus file 512 KB instead of 3.9 MB WAV. The phone's Opus encoder runs at about 33 kbit/s even when asked for 24.
 - Opus encoding first took 104 s (one packet drained per loop); fixed, now ~4 s.
-- Not yet checked on the phone: card UI (live note text, Load more), in-app edit, typed addition, edit made in Obsidian showing on the card, moved-note lookup.
+- Card UI, in-app edit, typed addition (T+ icon) and Obsidian edits showing on the cards: checked by the user, all good.
+- **Phase 2 complete.**
