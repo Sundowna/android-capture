@@ -88,7 +88,7 @@ fun NoteCard(c: Capture, title: String?, refresh: Int, canRecord: Boolean, onRec
                         Toast.makeText(ctx, "Could not open Obsidian. Is it installed?", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Edit, "Open note in Obsidian") }
                 IconButton(onClick = { typing = true }, modifier = Modifier.size(48.dp)) {
-                    Icon(painterResource(R.drawable.ic_keyboard), "Add typed text to this note")
+                    Icon(painterResource(R.drawable.ic_text_add), "Add typed text to this note")
                 }
                 IconButton(onClick = { onRecordMore(c) }, enabled = canRecord, modifier = Modifier.size(48.dp)) {
                     Icon(painterResource(R.drawable.ic_mic_add), "Record more for this note")
