@@ -22,3 +22,6 @@ models/
 vault-test/
 *.wav
 *.m4a
+
+# Release signing (local only)
+keystore.properties
