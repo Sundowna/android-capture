@@ -144,10 +144,12 @@ class ShareNoteTest {
     private val at = OffsetDateTime.of(2026, 11, 10, 19, 0, 0, 0, ZoneOffset.UTC)
 
     @Test fun linkNoteHasUrlTitleAndId() {
-        val n = NoteBuilder.linkNote("id-1", at, "https://example.org", "A \"quoted\" title: yes", null, "org.mozilla.firefox")
+        val n = NoteBuilder.linkNote("id-1", at, "https://example.org", "A \"quoted\" title: yes", null,
+            NoteBuilder.Source("Firefox", "org.mozilla.firefox"))
         assertTrue(n.contains("url: \"https://example.org\""))
         assertTrue(n.contains("title: \"A \\\"quoted\\\" title: yes\""))
-        assertTrue(n.contains("source_app: org.mozilla.firefox"))
+        assertTrue(n.contains("source_app: Firefox"))
+        assertTrue(n.contains("source_package: org.mozilla.firefox"))
         assertEquals("id-1", NoteText.captureId(n))
         assertTrue(NoteText.display(n).contains("<https://example.org>"))
     }
@@ -158,5 +160,19 @@ class ShareNoteTest {
             NoteBuilder.SharedFile("data.csv", "text/csv", 5, "bb")), null, null)
         assertTrue(n.contains("![[doc.pdf]]"))
         assertTrue(n.contains("\n[[data.csv]]"))
+        assertTrue(n.contains("Shared on 10 Nov 2026, 19:00 — 2 files"))
+    }
+
+    @Test fun sharedLineNamesAppAndContent() {
+        val pdf = listOf(NoteBuilder.SharedFile("a.pdf", "application/pdf", 1, "x", pages = 12))
+        assertEquals("Shared from Files on 10 Nov 2026, 19:00 — PDF, 12 pages",
+            NoteBuilder.sharedLine(at, NoteBuilder.Source("Files", "com.android.documentsui"), pdf))
+        val imgs = List(2) { NoteBuilder.SharedFile("i$it.jpg", "image/jpeg", 1, "x") }
+        assertEquals("2 images", NoteBuilder.describe(imgs))
+    }
+
+    @Test fun fileNoteCardTextIsNotEmpty() {
+        val n = NoteBuilder.fileNote("id-3", at, listOf(NoteBuilder.SharedFile("p.jpg", "image/jpeg", 1, "x")), null, null)
+        assertTrue(NoteText.display(n).startsWith("Shared on"))
     }
 }

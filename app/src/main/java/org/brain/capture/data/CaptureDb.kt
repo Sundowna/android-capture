@@ -36,6 +36,8 @@ data class Capture(
     val kind: String = "voice",
     /** URL or file SHA-256 of a share, to spot the same thing being shared twice. */
     val fingerprint: String? = null,
+    /** For shares: JSON with source app name and saved files (name, type, size, pages, thumbnail). */
+    val details: String? = null,
     val stagingPath: String? = null,
     /** Id of the capture whose note this recording is added to. */
     val appendTo: String? = null,
@@ -95,7 +97,7 @@ interface CaptureDao {
     @Query("SELECT * FROM pending_edits") suspend fun pendingEdits(): List<PendingEdit>
 }
 
-@Database(entities = [Capture::class, PendingEdit::class], version = 2, exportSchema = false)
+@Database(entities = [Capture::class, PendingEdit::class], version = 3, exportSchema = false)
 abstract class CaptureDb : RoomDatabase() {
     abstract fun dao(): CaptureDao
 
@@ -107,10 +109,16 @@ abstract class CaptureDb : RoomDatabase() {
             }
         }
 
+        private val V2_TO_V3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE captures ADD COLUMN details TEXT")
+            }
+        }
+
         @Volatile private var instance: CaptureDb? = null
         fun get(ctx: Context): CaptureDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(ctx.applicationContext, CaptureDb::class.java, "captures.db")
-                .addMigrations(V1_TO_V2).build()
+                .addMigrations(V1_TO_V2, V2_TO_V3).build()
                 .also { instance = it }
         }
     }

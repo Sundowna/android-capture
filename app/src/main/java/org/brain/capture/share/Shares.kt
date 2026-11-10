@@ -55,6 +55,7 @@ object Shares {
             val id = UUID.randomUUID().toString()
             val d = dir(ctx, id).apply { mkdirs() }
             val meta = JSONObject().put("sourceApp", sourceApp ?: "")
+                .put("sourceName", Previews.appName(ctx, sourceApp) ?: "")
             val files = JSONArray()
             var fingerprint: String? = null
             val kind: String
@@ -88,7 +89,10 @@ object Shares {
                     hashes.append(sha)
                     val ext = name?.substringAfterLast('.', "")?.ifEmpty { null }
                         ?: MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "bin"
+                    // Thumbnail (images, PDF first page) and page count, made now while the file is at hand.
+                    val preview = Previews.make(staged, mime, File(ctx.filesDir, "thumbs/$id-$i.jpg"))
                     files.put(JSONObject().put("staged", staged.name).put("name", name ?: "")
+                        .put("thumb", preview.thumb?.path ?: "").put("pages", preview.pages ?: -1)
                         .put("ext", ext).put("mime", mime ?: "").put("size", staged.length()).put("sha256", sha))
                 }
                 fingerprint = if (uris.size == 1) hashes.toString() else sha256(hashes.toString())
@@ -158,7 +162,7 @@ object Shares {
                     vault.cleanupTemp(folder)
                     "$folder/" + vault.write(folder, base, "md") { it.write(note.toByteArray()) }
                 }
-                c = c.copy(state = CaptureStates.SAVED, notePath = path, error = null,
+                c = c.copy(state = CaptureStates.SAVED, notePath = path, error = null, details = details(meta),
                     transcript = noteText(c, meta), lastActivityAt = System.currentTimeMillis())
                 dao.upsert(c)
                 d.deleteRecursively()
@@ -181,7 +185,7 @@ object Shares {
     }
 
     private fun buildNote(c: Capture, meta: JSONObject, at: OffsetDateTime): Pair<String, String> {
-        val source = meta.optString("sourceApp").ifEmpty { null }
+        val source = NoteBuilder.Source(meta.optString("sourceName").ifEmpty { null }, meta.optString("sourceApp").ifEmpty { null })
         val text = meta.optString("text").ifEmpty { null }
         val title = meta.optString("title").ifEmpty { null }
         return when (c.kind) {
@@ -197,10 +201,22 @@ object Shares {
                 val kind = ShareParse.fileKind(list.map { it.optString("mime") })
                 val label = list.firstOrNull()?.optString("name")?.substringBeforeLast('.')?.ifEmpty { null } ?: title
                 NoteBuilder.baseName(at, kind, label) to NoteBuilder.fileNote(
-                    c.id, at, list.map { NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256")) },
+                    c.id, at, list.map { NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256"), it.optInt("pages", -1)) },
                     text, source)
             }
         }
+    }
+
+    /** What the card shows for a share: where it came from and which files were saved. */
+    private fun details(meta: JSONObject): String {
+        val files = meta.getJSONArray("files")
+        val out = JSONArray()
+        for (i in 0 until files.length()) {
+            val f = files.getJSONObject(i)
+            out.put(JSONObject().put("name", f.optString("vaultName")).put("mime", f.optString("mime"))
+                .put("size", f.optLong("size")).put("pages", f.optInt("pages", -1)).put("thumb", f.optString("thumb")))
+        }
+        return JSONObject().put("source", meta.optString("sourceName")).put("files", out).toString()
     }
 
     /** Short text kept in the database as the card's fallback when the vault can't be read. */

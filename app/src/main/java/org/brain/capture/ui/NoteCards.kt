@@ -10,6 +10,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -66,11 +73,15 @@ fun NoteCard(c: Capture, title: String?, refresh: Int, canRecord: Boolean, onRec
                 view == null && text.isEmpty() -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(end = 8.dp))
                 view?.missing == true -> Text("This note is no longer in the vault (deleted?). Showing the app's copy:\n\n$text",
                     color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(end = 8.dp))
-                else -> SelectionContainer {
-                    Text(text.ifBlank { "(empty note)" },
-                        Modifier.padding(end = 8.dp).clickable(enabled = view?.fromVault == true) { editing = true })
+                else -> {
+                    val shown = text.ifBlank { if (c.kind == "file") sharedSummary(c) else "" }
+                    if (shown.isNotBlank() || c.kind != "file") SelectionContainer {
+                        Text(shown.ifBlank { "(empty note)" },
+                            Modifier.padding(end = 8.dp).clickable(enabled = view?.fromVault == true) { editing = true })
+                    }
                 }
             }
+            if (c.kind == "file") SharedFiles(c)
             val date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
                 .format(java.util.Date(c.createdAt))
             Text(
@@ -78,9 +89,9 @@ fun NoteCard(c: Capture, title: String?, refresh: Int, canRecord: Boolean, onRec
                     "voice" -> "%s · %.0f s audio · transcription %.1f s · %.2f× · %d part(s)".format(
                         date, c.audioSeconds, c.transcribeMs / 1000.0,
                         if (c.audioSeconds > 0) c.transcribeMs / 1000.0 / c.audioSeconds else 0.0, c.chunks)
-                    "link" -> "$date · shared link"
-                    "text" -> "$date · shared text"
-                    else -> "$date · shared file"
+                    "link" -> "$date · shared link" + sourceSuffix(c)
+                    "text" -> "$date · shared text" + sourceSuffix(c)
+                    else -> "$date · shared" + sourceSuffix(c) + (c.notePath?.let { " · ${it.substringBeforeLast('/')}" } ?: "")
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -189,4 +200,66 @@ private fun TypeDialog(c: Capture, onDone: () -> Unit) {
         },
         dismissButton = { TextButton(enabled = !saving, onClick = onDone) { Text("Cancel") } },
     )
+}
+
+private data class FileInfo(val name: String, val mime: String, val size: Long, val pages: Int, val thumb: String)
+
+private fun files(c: Capture): List<FileInfo> = runCatching {
+    val a = org.json.JSONObject(c.details ?: return emptyList()).getJSONArray("files")
+    (0 until a.length()).map { a.getJSONObject(it) }.map {
+        FileInfo(it.optString("name"), it.optString("mime"), it.optLong("size"), it.optInt("pages", -1), it.optString("thumb"))
+    }
+}.getOrDefault(emptyList())
+
+private fun sourceSuffix(c: Capture): String = runCatching {
+    org.json.JSONObject(c.details ?: return "").optString("source").ifEmpty { null }?.let { " from $it" }
+}.getOrNull().orEmpty()
+
+/** Fallback text for a file note that has nothing but embeds (shares from before this version). */
+private fun sharedSummary(c: Capture): String {
+    val f = files(c)
+    if (f.isEmpty()) return "Shared file" + sourceSuffix(c)
+    return "Shared" + sourceSuffix(c) + " — " + org.brain.capture.vault.NoteBuilder.describe(
+        f.map { org.brain.capture.vault.NoteBuilder.SharedFile(it.name, it.mime, it.size, "", it.pages) })
+}
+
+/** Thumbnails for images and PDFs, a line with name and size for other files. Tapping opens the note. */
+@Composable
+private fun SharedFiles(c: Capture) {
+    val ctx = LocalContext.current
+    val list = files(c)
+    if (list.isEmpty()) return
+    val open = { c.notePath?.let { openInObsidian(ctx, it) }; Unit }
+    val withThumb = list.filter { it.thumb.isNotEmpty() && java.io.File(it.thumb).exists() }
+    if (withThumb.isNotEmpty()) {
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(end = 8.dp).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            withThumb.forEach { f -> Thumb(f, open) }
+        }
+    }
+    list.filter { it !in withThumb || it.mime == "application/pdf" }.forEach { f ->
+        val size = android.text.format.Formatter.formatShortFileSize(ctx, f.size)
+        val pages = if (f.pages > 0) " · ${f.pages} page${if (f.pages == 1) "" else "s"}" else ""
+        Text("📄 ${f.name} · $size$pages", style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(end = 8.dp).clickable(onClick = open))
+    }
+}
+
+@Composable
+private fun Thumb(f: FileInfo, onClick: () -> Unit) {
+    var bmp by remember(f.thumb) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(f.thumb) {
+        bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            android.graphics.BitmapFactory.decodeFile(f.thumb)?.asImageBitmap()
+        }
+    }
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+    val m = Modifier.height(112.dp).clip(shape).clickable(onClick = onClick)
+    bmp?.let {
+        androidx.compose.foundation.Image(it, contentDescription = f.name,
+            modifier = m.aspectRatio(it.width.toFloat() / it.height.coerceAtLeast(1)),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    } ?: androidx.compose.foundation.layout.Box(m.width(84.dp))
 }

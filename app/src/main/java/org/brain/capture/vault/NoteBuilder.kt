@@ -46,29 +46,57 @@ object NoteBuilder {
 
     private val TIME = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT)
 
-    data class SharedFile(val vaultName: String, val mime: String?, val size: Long, val sha256: String)
+    data class SharedFile(val vaultName: String, val mime: String?, val size: Long, val sha256: String, val pages: Int = -1)
+
+    /** The app something was shared from: readable [name] ("Files") and [pkg] (package name). */
+    data class Source(val name: String?, val pkg: String?)
+
+    private fun sourceFields(s: Source?) = listOfNotNull(s?.name?.let { "source_app" to it }, s?.pkg?.let { "source_package" to it })
+
+    private val READABLE = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", Locale.ENGLISH)
+
+    /** "Shared from Files on 10 Nov 2026, 18:40 — PDF, 12 pages" */
+    fun sharedLine(at: OffsetDateTime, source: Source?, files: List<SharedFile>): String {
+        val from = source?.name?.let { "from $it " }.orEmpty()
+        return "Shared ${from}on ${at.format(READABLE)} — ${describe(files)}"
+    }
+
+    /** "1 image", "3 images", "PDF, 12 pages", "2 PDFs", "3 files". */
+    fun describe(files: List<SharedFile>): String {
+        val n = files.size
+        return when {
+            files.all { it.mime?.startsWith("image/") == true } -> if (n == 1) "1 image" else "$n images"
+            files.all { it.mime == "application/pdf" } ->
+                if (n == 1) "PDF" + (files[0].pages.takeIf { it > 0 }?.let { ", $it page${if (it == 1) "" else "s"}" } ?: "")
+                else "$n PDFs"
+            else -> if (n == 1) "1 file" else "$n files"
+        }
+    }
 
     /** Attachment name for a shared file: its own name if it has one, else "<time> Shared". */
     fun fileBaseName(at: OffsetDateTime, original: String?): String =
         safe(original.orEmpty()).take(80).trim().ifEmpty { "${at.format(FILE_STAMP)} Shared" }
 
-    fun linkNote(captureId: String, at: OffsetDateTime, url: String, title: String?, text: String?, sourceApp: String?): String =
-        shareNote(captureId, at, "link", listOfNotNull("url" to url, title?.let { "title" to it }, sourceApp?.let { "source_app" to it })) {
+    fun linkNote(captureId: String, at: OffsetDateTime, url: String, title: String?, text: String?, source: Source?): String =
+        shareNote(captureId, at, "link", listOfNotNull("url" to url, title?.let { "title" to it }) + sourceFields(source)) {
             appendLine("# ${title ?: url}")
             appendLine()
             appendLine("<$url>")
             text?.let { appendLine(); it.lines().forEach { l -> appendLine("> $l") } }
         }
 
-    fun textNote(captureId: String, at: OffsetDateTime, text: String, sourceApp: String?): String =
-        shareNote(captureId, at, "text", listOfNotNull(sourceApp?.let { "source_app" to it })) { appendLine(text) }
+    fun textNote(captureId: String, at: OffsetDateTime, text: String, source: Source?): String =
+        shareNote(captureId, at, "text", sourceFields(source)) { appendLine(text) }
 
-    fun fileNote(captureId: String, at: OffsetDateTime, files: List<SharedFile>, text: String?, sourceApp: String?): String =
+    fun fileNote(captureId: String, at: OffsetDateTime, files: List<SharedFile>, text: String?, source: Source?): String =
         shareNote(captureId, at, "file", buildList {
             add("files" to files.joinToString(", ") { "[[${it.vaultName}]]" })
             if (files.size == 1) { add("mime" to (files[0].mime ?: "")); add("size" to files[0].size.toString()); add("sha256" to files[0].sha256) }
-            sourceApp?.let { add("source_app" to it) }
+            addAll(sourceFields(source))
         }) {
+            // A readable line, so the note makes sense on its own and not only as embeds.
+            appendLine(sharedLine(at, source, files))
+            appendLine()
             text?.let { appendLine(it); appendLine() }
             for (f in files) {
                 // PDFs and images show inline in Obsidian; other files become a link.
