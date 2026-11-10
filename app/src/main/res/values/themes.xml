@@ -2,8 +2,8 @@
     <style name="Theme.Capture" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@android:color/white</item>
     </style>
-    <style name="Theme.Capture.Invisible" parent="android:Theme.Translucent.NoTitleBar">
+    <!-- Transparent window: the quick-record panel draws its own dimmed backdrop. -->
+    <style name="Theme.Capture.Panel" parent="android:Theme.Translucent.NoTitleBar">
         <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowNoDisplay">true</item>
     </style>
 </resources>

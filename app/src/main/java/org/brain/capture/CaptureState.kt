@@ -13,7 +13,7 @@ sealed interface Phase {
     /** [done] of [total] chunks finished. Progress is counted in real chunks, never estimated. */
     data class Transcribing(val done: Int, val total: Int) : Phase
     data object WritingVault : Phase
-    data class Saved(val notePath: String) : Phase
+    data class Saved(val notePath: String, val warning: String? = null) : Phase
     data class Failed(val message: String, val wavPath: String?) : Phase
 }
 
@@ -38,7 +38,12 @@ object CaptureState {
     private val _last = MutableStateFlow<LastResult?>(null)
     val last: StateFlow<LastResult?> = _last.asStateFlow()
 
+    /** Staging file being recorded or processed right now; never listed as "waiting". */
+    @Volatile var currentFile: String? = null
+        private set
+
     fun set(p: Phase) { _phase.value = p }
+    fun current(path: String?) { currentFile = path }
     fun level(v: Float) { _level.value = v }
     fun result(r: LastResult) { _last.value = r }
 

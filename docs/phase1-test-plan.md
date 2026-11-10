@@ -42,4 +42,10 @@ The `Benchmark:` line gives exact timings.
 - Test 1 (spoken English, language "auto"): 31.4 s audio, model load 0.83 s, transcription 7.8 s for 2 parts, **0.25× real time**. Transcript accurate, punctuation correct, no visible damage at the join between the parts.
 - Test 6: WAV (1 004 844 bytes, valid header) in `Inbox/Attachments`, note in `Inbox/Voice`. The temp-file rename worked through SAF; no `.capture-*.tmp` left behind. Staging emptied.
 - Test 2: Whisper+ took roughly the same time on the same text (user stopwatch). **Go/no-go passed: Option B matches Whisper+ in quality and speed.**
-- Still open: tests 3–5 and 7–10.
+- Tests 3–5, 7 (run 2, same day): 2-minute German recording 126 s → 48 s (5 parts, 0.38×), correct. Locked-phone recording and stop from the notification work. Two recordings in one minute got " 2" suffixes.
+- Findings from run 2, fixed in the next build:
+  - Home-screen Record icon gave no visible feedback (only a quiet notification) → now opens a small bottom panel with timer, level meter and a large Stop button, then shows transcription progress and closes itself after saving.
+  - Minute-only file names → now `yyyy-MM-dd HH.mm.ss` (colons are not allowed in Obsidian file names).
+  - "Recordings waiting" with Retry was confusing → recordings left over from an interruption now resume automatically when the app opens; the file being processed is never listed as waiting; Retry only appears after a real failure.
+  - Whisper invented "[BLANK_AUDIO]", "[ Silence ]", "(heartbeat)" for silence, and these became note titles → such tags are stripped; a recording that is ≥90 % digital silence (microphone toggled off) is not transcribed and the note gets a warning callout.
+- Test 9 (vault access revoked) not run yet.

@@ -5,9 +5,10 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object NoteBuilder {
-    private val FILE_STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HHmm", Locale.ROOT)
+    // Colons are not allowed in Obsidian file names (or on Windows), so the time uses dots.
+    private val FILE_STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm.ss", Locale.ROOT)
 
-    /** e.g. "2026-11-10 0853 Voice – Remember to call the dentist" */
+    /** e.g. "2026-11-10 08.53.12 Voice – Remember to call the dentist" */
     fun baseName(at: OffsetDateTime, kind: String, text: String?): String {
         val words = text.orEmpty().split(Regex("\\s+")).filter { it.isNotBlank() }.take(6).joinToString(" ")
         val title = safe(words).take(50).trim()
@@ -23,6 +24,7 @@ object NoteBuilder {
         transcript: String?,
         model: String,
         language: String,
+        warning: String? = null,
     ): String = buildString {
         appendLine("---")
         appendLine("type: capture")
@@ -36,6 +38,7 @@ object NoteBuilder {
         appendLine("status: inbox")
         appendLine("---")
         appendLine()
+        warning?.let { appendLine("> [!warning] $it"); appendLine() }
         appendLine(transcript?.ifBlank { "_(no speech recognised)_" } ?: "_(transcription pending)_")
         appendLine()
         appendLine("![[${audioFile}]]")

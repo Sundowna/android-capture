@@ -65,7 +65,7 @@ class CaptureService : Service() {
             ACTION_START -> startRecording()
             ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else if (!CaptureState.isBusy) stopSelf()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
-            ACTION_RETRY -> intent.getStringExtra(EXTRA_WAV)?.let { retry(File(it)) }
+            ACTION_PROCESS_PENDING -> processPending()
         }
         return START_NOT_STICKY
     }
@@ -85,6 +85,7 @@ class CaptureService : Service() {
         stopRequested = false
 
         val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
+        CaptureState.current(file.path)
         recordJob = scope.launch(Dispatchers.IO) {
             val ok = runCatching { record(file) }
                 .onFailure { Log.e(TAG, "Recording failed", it) }
@@ -92,6 +93,7 @@ class CaptureService : Service() {
             CaptureState.level(0f)
             if (!ok) {
                 CaptureState.set(Phase.Failed("Recording failed", file.takeIf { it.length() > 44 }?.path))
+                CaptureState.current(null)
                 finish(); return@launch
             }
             vibrate()
@@ -132,16 +134,30 @@ class CaptureService : Service() {
         CaptureState.set(Phase.SavingAudio)
     }
 
-    private fun retry(file: File) {
-        if (CaptureState.isBusy || !file.exists()) return
+    /** Transcribes and saves every recording still waiting in staging (after an interruption or failure). */
+    private fun processPending() {
+        if (CaptureState.isBusy) return
+        val waiting = pendingRecordings(this)
+        if (waiting.isEmpty()) { if (!CaptureState.isBusy) stopSelf(); return }
         CaptureState.set(Phase.LoadingModel)
         startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        scope.launch { runPipeline(file) }
+        scope.launch { runPipeline(waiting.first()) }
     }
 
-    private suspend fun runPipeline(file: File) {
-        VoicePipeline(applicationContext).run(file)
+    /** Processes [first], then anything else left in staging, one at a time. Stops at the first failure. */
+    private suspend fun runPipeline(first: File) {
+        val pipeline = VoicePipeline(applicationContext)
+        var next: File? = first
+        val done = HashSet<String>()
+        while (next != null) {
+            done += next.path
+            CaptureState.current(next.path)
+            pipeline.run(next)
+            if (CaptureState.phase.value is Phase.Failed) break
+            next = pendingRecordings(this).firstOrNull { it.path !in done }
+        }
+        CaptureState.current(null)
         finish()
     }
 
@@ -184,7 +200,8 @@ class CaptureService : Service() {
                 .setContentText(if (p.total > 1) "Part ${p.done + 1} of ${p.total}" else null)
                 .setProgress(p.total, p.done, p.total <= 1).setOngoing(true)
             Phase.WritingVault -> b.setContentTitle("Saving to vault…").setProgress(0, 0, true).setOngoing(true)
-            is Phase.Saved -> b.setContentTitle("✓ Saved").setContentText(p.notePath)
+            is Phase.Saved -> b.setContentTitle(if (p.warning != null) "Saved, with a warning" else "✓ Saved")
+                .setContentText(p.warning ?: p.notePath)
                 .setAutoCancel(true).setTimeoutAfter(4000)
             is Phase.Failed -> b.setContentTitle("⚠ ${p.message}")
                 .setContentText(if (p.wavPath != null) "Recording kept. Tap Retry." else null)
@@ -194,7 +211,7 @@ class CaptureService : Service() {
                     // started while the app is visible (Android 14+).
                     if (p.wavPath != null) addAction(Notification.Action.Builder(null, "Retry",
                         PendingIntent.getActivity(this@CaptureService, 1,
-                            Intent(this@CaptureService, MainActivity::class.java).putExtra(EXTRA_WAV, p.wavPath),
+                            Intent(this@CaptureService, MainActivity::class.java).putExtra(EXTRA_RETRY, true),
                             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
                 }
             Phase.Idle -> b.setContentTitle("Ready")
@@ -221,11 +238,18 @@ class CaptureService : Service() {
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_TOGGLE = "toggle"
-        const val ACTION_RETRY = "retry"
-        const val EXTRA_WAV = "wav"
+        const val ACTION_PROCESS_PENDING = "process_pending"
+        const val EXTRA_RETRY = "retry"
         private val STAMP = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.ROOT)
 
         fun stagingDir(ctx: Context): File = File(ctx.filesDir, "staging").apply { mkdirs() }
+
+        /** Recordings in staging that are not being recorded or processed right now. */
+        fun pendingRecordings(ctx: Context): List<File> {
+            val busyWith = CaptureState.currentFile
+            return stagingDir(ctx).listFiles { f -> f.extension == "wav" && f.length() > 44 && f.path != busyWith }
+                ?.sortedBy { it.name }.orEmpty()
+        }
 
         fun send(ctx: Context, action: String, extra: Intent.() -> Unit = {}) {
             val i = Intent(ctx, CaptureService::class.java).setAction(action).apply(extra)

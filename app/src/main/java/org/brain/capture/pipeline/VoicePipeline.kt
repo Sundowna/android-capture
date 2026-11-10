@@ -33,11 +33,18 @@ class VoicePipeline(private val context: Context) {
         try {
             val samples = WavReader.readFloats(wav)
             val seconds = samples.size / WhisperOnnx.SAMPLE_RATE.toDouble()
-            val transcript = transcribe(samples, seconds)
+            val muted = AudioCheck.mutedFraction(samples)
+            val warning = when {
+                muted > 0.9 -> "No sound was recorded. Is the microphone turned off in Quick Settings?"
+                muted > 0.3 -> "The microphone was off for part of this recording."
+                else -> null
+            }
+            // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
+            val transcript = if (muted > 0.9) "" else NonSpeech.strip(transcribe(samples, seconds))
             CaptureState.set(Phase.WritingVault)
-            val path = writeToVault(wav, seconds, transcript)
+            val path = writeToVault(wav, seconds, transcript, warning)
             wav.delete()
-            CaptureState.set(Phase.Saved(path))
+            CaptureState.set(Phase.Saved(path, warning))
         } catch (e: VaultUnavailableException) {
             Log.w(TAG, "Vault unavailable", e)
             CaptureState.set(Phase.Failed("${e.message}. Recording kept.", wav.path))
@@ -70,7 +77,7 @@ class VoicePipeline(private val context: Context) {
         }
     }
 
-    private fun writeToVault(wav: File, seconds: Double, transcript: String): String {
+    private fun writeToVault(wav: File, seconds: Double, transcript: String, warning: String?): String {
         val tree = prefs.vaultUri ?: throw VaultUnavailableException("No vault folder selected")
         val vault = VaultWriter(context, tree)
         val inbox = prefs.inboxFolder.trim('/')
@@ -91,6 +98,7 @@ class VoicePipeline(private val context: Context) {
             transcript = transcript,
             model = "whisper-small-int8 (onnx)",
             language = prefs.language,
+            warning = warning,
         )
         val noteName = vault.write("$inbox/Voice", base, "md") { it.write(note.toByteArray()) }
         return "$inbox/Voice/$noteName"
@@ -103,4 +111,32 @@ class VoicePipeline(private val context: Context) {
     }.getOrElse { java.time.OffsetDateTime.now() }
 
     companion object { private const val TAG = "VoicePipeline" }
+}
+
+/** Whisper writes tags such as "[BLANK_AUDIO]", "[ Silence ]" or "(heartbeat)" when nobody speaks. */
+object NonSpeech {
+    private val SQUARE = Regex("""\[[^\]]*\]""")
+    private val ONLY_TAGS = Regex("""^(\s*(\([^)]*\)|\*[^*]*\*|♪+)\s*)*$""")
+    private val SPACES = Regex("""\s+""")
+
+    fun strip(text: String): String {
+        val t = text.replace(SQUARE, " ").replace(SPACES, " ").trim()
+        return if (ONLY_TAGS.matches(t)) "" else t
+    }
+}
+
+object AudioCheck {
+    /** Share of 100 ms frames that are exact digital silence, which is what a muted microphone delivers. */
+    fun mutedFraction(samples: FloatArray): Double {
+        val frame = WhisperOnnx.SAMPLE_RATE / 10
+        val frames = samples.size / frame
+        if (frames == 0) return 1.0
+        var muted = 0
+        for (f in 0 until frames) {
+            var allZero = true
+            for (i in f * frame until (f + 1) * frame) if (samples[i] != 0f) { allZero = false; break }
+            if (allZero) muted++
+        }
+        return muted / frames.toDouble()
+    }
 }
