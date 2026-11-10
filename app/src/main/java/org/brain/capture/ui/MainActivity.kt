@@ -312,21 +312,37 @@ private fun SetupRow(label: String, value: String, action: @Composable () -> Uni
 }
 
 /**
- * Opens [notePath] (relative to the chosen vault folder) in Obsidian. Uses Obsidian's `path`
- * parameter with the absolute file path, so it works whether the chosen folder is the vault
- * itself or a folder inside it.
+ * Opens [notePath] (relative to the chosen vault folder) in Obsidian.
+ * Obsidian on Android needs the vault's name plus the path inside the vault; it ignores the
+ * absolute-path form. If the chosen folder is the vault (it contains `.obsidian`), its folder
+ * name is the vault name. Otherwise fall back to the absolute path.
  */
 private fun openInObsidian(ctx: android.content.Context, notePath: String): Boolean {
     val tree = Prefs(ctx).vaultUri ?: return false
     val docId = android.provider.DocumentsContract.getTreeDocumentId(tree) // e.g. "primary:Documents/Vault"
-    val volume = docId.substringBefore(':')
-    val root = if (volume == "primary") "/storage/emulated/0" else "/storage/$volume"
-    val absolute = listOf(root, docId.substringAfter(':', ""), notePath).filter { it.isNotEmpty() }.joinToString("/")
-    val uri = Uri.parse("obsidian://open?path=" + Uri.encode(absolute))
+    val relRoot = docId.substringAfter(':', "")
+    val file = notePath.removeSuffix(".md")
+    val link = if (isVaultRoot(ctx, tree, docId)) {
+        "obsidian://open?vault=" + Uri.encode(relRoot.substringAfterLast('/')) + "&file=" + Uri.encode(file)
+    } else {
+        val volume = docId.substringBefore(':')
+        val root = if (volume == "primary") "/storage/emulated/0" else "/storage/$volume"
+        "obsidian://open?path=" + Uri.encode(listOf(root, relRoot, notePath).filter { it.isNotEmpty() }.joinToString("/"))
+    }
     return runCatching {
-        ctx.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }.isSuccess
 }
+
+private fun isVaultRoot(ctx: android.content.Context, tree: Uri, docId: String): Boolean = runCatching {
+    val children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+    ctx.contentResolver.query(children,
+        arrayOf(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+        var found = false
+        while (c.moveToNext()) if (c.getString(0) == ".obsidian") { found = true; break }
+        found
+    } ?: false
+}.getOrDefault(false)
 
 /** File picker that starts in the Download folder, where the browser saved the model. */
 private class OpenInDownloads : ActivityResultContracts.OpenDocument() {
