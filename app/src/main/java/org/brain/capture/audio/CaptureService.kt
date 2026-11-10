@@ -15,6 +15,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.VibratorManager
@@ -82,8 +83,16 @@ class CaptureService : Service() {
             CaptureState.set(Phase.Failed("Microphone permission missing", null))
             stopSelf(); return
         }
+        // Storage: refuse when there is no room left, warn when it's getting tight.
+        val free = stagingDir(this).usableSpace
+        if (free < MIN_FREE_TO_START) {
+            CaptureState.set(Phase.Failed("Phone storage is full (${free / 1_000_000} MB free). Free up space, then record again.", null))
+            stopSelf(); return
+        }
+        val minutesLeft = ((free - STOP_BELOW) / BYTES_PER_SECOND / 60).toInt().takeIf { it < 60 }
         val started = System.currentTimeMillis()
-        CaptureState.set(Phase.Recording(started, appendLabel))
+        CaptureState.set(Phase.Recording(started, appendLabel, minutesLeft))
+        holdWakeLock()
         startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         vibrate()
@@ -98,7 +107,12 @@ class CaptureService : Service() {
                 id = UUID.randomUUID().toString(), createdAt = started, state = CaptureStates.RECORDING,
                 stagingPath = file.path, appendTo = appendTo,
             ))
-            val ok = runCatching { record(file) }
+            val ok = runCatching {
+                if (record(file)) CaptureDb.get(applicationContext).dao().byStaging(file.path)?.let {
+                    CaptureDb.get(applicationContext).dao().upsert(it.copy(
+                        warning = "Recording stopped early because the phone storage was full."))
+                }
+            }
                 .onFailure { Log.e(TAG, "Recording failed", it) }
                 .isSuccess
             CaptureState.level(0f)
@@ -113,7 +127,9 @@ class CaptureService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun record(file: File) {
+    /** Records until stopped. Returns true if it had to stop early because storage ran out. */
+    private fun record(file: File): Boolean {
+        var storageFull = false
         val rate = 16_000
         val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val recorder = AudioRecord(
@@ -135,7 +151,10 @@ class CaptureService : Service() {
                     for (i in 0 until n) sum += buf[i] * buf[i].toDouble()
                     CaptureState.level((sqrt(sum / n) / 8000.0).coerceIn(0.0, 1.0).toFloat())
                     val now = SystemClock.elapsedRealtime()
-                    if (now - lastSync > 1000) { wav.sync(); lastSync = now }
+                    if (now - lastSync > 1000) {
+                        wav.sync(); lastSync = now
+                        if (file.parentFile!!.usableSpace < STOP_BELOW) { storageFull = true; stopRequested = true }
+                    }
                 }
             } finally {
                 recorder.stop()
@@ -143,6 +162,7 @@ class CaptureService : Service() {
             }
         }
         CaptureState.set(Phase.SavingAudio)
+        return storageFull
     }
 
     /** Transcribes and saves every recording still waiting in staging (after an interruption or failure). */
@@ -153,6 +173,7 @@ class CaptureService : Service() {
         CaptureState.set(Phase.LoadingModel)
         startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        holdWakeLock()
         scope.launch { runPipeline(waiting.first()) }
     }
 
@@ -172,7 +193,23 @@ class CaptureService : Service() {
         finish()
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    /** Keeps the CPU awake while recording and transcribing with the screen off (max. 1 hour). */
+    private fun holdWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        wakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BrainCapture:capture")
+            .apply { setReferenceCounted(false); acquire(60 * 60 * 1000L) }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+        wakeLock = null
+    }
+
     private fun finish() {
+        releaseWakeLock()
         // Leave the final state (saved / failed) visible as a normal, dismissable notification.
         stopForeground(STOP_FOREGROUND_DETACH)
         notificationManager().notify(NOTIF_ID, buildNotification(CaptureState.phase.value))
@@ -180,6 +217,7 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        releaseWakeLock()
         stopRequested = true
         scope.cancel()
         super.onDestroy()
@@ -203,6 +241,7 @@ class CaptureService : Service() {
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         when (p) {
             is Phase.Recording -> b.setContentTitle(if (p.appendTo != null) "Recording · adding to note" else "Recording")
+                .setContentText(p.minutesLeft?.let { "Storage low: about $it min of recording left" })
                 .setUsesChronometer(true).setWhen(p.startedAtMs).setShowWhen(true).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
             Phase.SavingAudio -> b.setContentTitle("Saving recording…").setProgress(0, 0, true).setOngoing(true)
@@ -250,6 +289,10 @@ class CaptureService : Service() {
         private const val TAG = "CaptureService"
         private const val CHANNEL = "capture"
         private const val NOTIF_ID = 1
+        /** Recording needs ~32 KB per second; keep a safety margin for the vault copy. */
+        private const val BYTES_PER_SECOND = 32_000L
+        private const val MIN_FREE_TO_START = 50_000_000L
+        private const val STOP_BELOW = 20_000_000L
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_TOGGLE = "toggle"

@@ -81,6 +81,7 @@ interface CaptureDao {
     fun cardCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM captures") suspend fun count(): Int
+    @Query("DELETE FROM captures WHERE state = 'discarded'") suspend fun deleteDiscarded()
 
     /** A saved share of the same URL or file since [since], if any. */
     @Query("SELECT * FROM captures WHERE fingerprint = :fp AND state = 'saved' AND createdAt >= :since ORDER BY createdAt DESC LIMIT 1")

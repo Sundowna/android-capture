@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed interface Phase {
     data object Idle : Phase
     /** [appendTo] is the vault path of the note this recording will be added to, if any. */
-    data class Recording(val startedAtMs: Long, val appendTo: String? = null) : Phase
+    data class Recording(val startedAtMs: Long, val appendTo: String? = null, val minutesLeft: Int? = null) : Phase
     data object SavingAudio : Phase
     data object LoadingModel : Phase
     /** [done] of [total] chunks finished. Progress is counted in real chunks, never estimated. */

@@ -72,36 +72,39 @@ class VoicePipeline(private val context: Context) {
     }
 
     private suspend fun transcribeStep(c: Capture, wav: File): Capture {
-        val samples = WavReader.readFloats(wav)
-        val seconds = samples.size / WhisperOnnx.SAMPLE_RATE.toDouble()
-        val muted = AudioCheck.mutedFraction(samples)
+        // One streaming pass for loudness; the audio itself is then read piece by piece, so even
+        // hour-long recordings need little memory.
+        val profile = WavReader.profile(wav, Chunker.FRAME_SAMPLES)
+        val seconds = profile.samples / WhisperOnnx.SAMPLE_RATE.toDouble()
+        val muted = profile.mutedFraction
         val warning = when {
             muted > 0.9 -> "No sound was recorded. Is the microphone turned off in Quick Settings?"
             muted > 0.3 -> "The microphone was off for part of this recording."
             else -> null
         }
         // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
-        val r = if (muted > 0.9) LastResult("", seconds, 0, 0, 0) else transcribe(samples, seconds)
+        val r = if (muted > 0.9) LastResult("", seconds, 0, 0, 0) else transcribe(wav, profile, seconds)
         return c.copy(
             state = CaptureStates.TRANSCRIBED,
             transcript = NonSpeech.strip(r.transcript),
             audioSeconds = seconds, modelLoadMs = r.modelLoadMs, transcribeMs = r.transcribeMs, chunks = r.chunks,
-            warning = warning,
+            warning = listOfNotNull(c.warning, warning).joinToString(" ").ifEmpty { null },
         ).also { dao.upsert(it) }
     }
 
-    private fun transcribe(samples: FloatArray, seconds: Double): LastResult {
+    private fun transcribe(wav: File, profile: WavReader.Profile, seconds: Double): LastResult {
         val store = ModelStore(context)
         if (!store.isInstalled()) error("Speech model not installed")
         CaptureState.set(Phase.LoadingModel)
         val t0 = SystemClock.elapsedRealtime()
         WhisperOnnx(store.dir).use { whisper ->
             val loadMs = SystemClock.elapsedRealtime() - t0
-            val chunks = Chunker.split(samples)
+            val chunks = Chunker.plan(profile.energy, profile.samples)
             val lang = prefs.language.takeIf { it != "auto" }
             val t1 = SystemClock.elapsedRealtime()
-            val parts = chunks.mapIndexed { i, chunk ->
+            val parts = chunks.mapIndexed { i, range ->
                 CaptureState.set(Phase.Transcribing(i, chunks.size))
+                val chunk = WavReader.readRange(wav, range.first, range.last + 1)
                 // Pieces without any speech-level sound are skipped (Whisper invents text for silence).
                 if (AudioCheck.loudestFrame(chunk) < SPEECH_LEVEL) "" else whisper.transcribe(chunk, lang)
             }
@@ -121,7 +124,7 @@ class VoicePipeline(private val context: Context) {
         val at = capturedAt(wav)
         vault.cleanupTemp("$inbox/Attachments")
         val ogg = File(wav.path.removeSuffix(".wav") + ".ogg")
-        val encoded = runCatching { OpusEncoder.encode(wav, ogg); true }
+        val encoded = prefs.audioFormat != "wav" && runCatching { OpusEncoder.encode(wav, ogg); true }
             .onFailure { Log.w(TAG, "Opus encoding failed, keeping WAV", it) }.getOrDefault(false)
         val source = if (encoded) ogg else wav
         val name = vault.write("$inbox/Attachments", NoteBuilder.baseName(at, "Voice", null), source.extension) { out ->

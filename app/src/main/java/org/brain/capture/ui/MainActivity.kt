@@ -31,6 +31,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -101,7 +102,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     val phase by CaptureState.phase.collectAsState()
     val level by CaptureState.level.collectAsState()
     val dao = remember { CaptureDb.get(ctx).dao() }
-    var limit by remember { mutableIntStateOf(5) }
+    var limit by remember { mutableIntStateOf(prefs.cardCount) }
     val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
     val total by remember { dao.cardCount() }.collectAsState(0)
     // Re-read notes when coming back to the app (e.g. after editing in Obsidian).
@@ -112,11 +113,9 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
         org.brain.capture.share.Shares.resumePending(ctx) // shares that could not be saved earlier
     }
 
-    var vault by remember { mutableStateOf(prefs.vaultUri) }
-    var modelReady by remember { mutableStateOf(models.isInstalled()) }
-    var importProgress by remember { mutableStateOf<Float?>(-1f) } // -1 = not importing
-    var importError by remember { mutableStateOf<String?>(null) }
-    var language by remember { mutableStateOf(prefs.language) }
+    var showSettings by remember { mutableStateOf(false) }
+    var setupTick by remember { mutableIntStateOf(0) }
+    val setupDone = remember(showSettings, setupTick) { prefs.vaultUri != null && models.isInstalled() }
     var waiting by remember { mutableStateOf(CaptureService.pendingRecordings(ctx).size) }
     LaunchedEffect(phase) { waiting = CaptureService.pendingRecordings(ctx).size }
 
@@ -134,24 +133,6 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.RECORD_AUDIO] == true) CaptureService.send(ctx, CaptureService.ACTION_START)
     }
-    val pickVault = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
-        if (uri != null) {
-            ctx.contentResolver.takePersistableUriPermission(uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            prefs.vaultUri = uri; vault = uri
-        }
-    }
-    val pickModel = rememberLauncherForActivityResult(OpenInDownloads()) { uri: Uri? ->
-        if (uri != null) scope.launch {
-            importError = null; importProgress = null
-            runCatching {
-                withContext(Dispatchers.IO) { models.import(uri) { p -> scope.launch { importProgress = p } } }
-            }.onFailure { importError = it.message }
-            importProgress = -1f
-            modelReady = models.isInstalled()
-        }
-    }
-
     fun toggleRecording(appendTo: Capture? = null) {
         when {
             phase is Phase.Recording -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
@@ -168,11 +149,28 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     val canAppend = !phase.isBusy
     val onAppend: (Capture) -> Unit = { c -> toggleRecording(c) }
 
+    if (showSettings) {
+        SettingsScreen(onBack = { showSettings = false; limit = maxOf(limit, prefs.cardCount) })
+        return
+    }
+
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Brain Capture", style = MaterialTheme.typography.headlineMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Brain Capture", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") }
+        }
+
+        // First run: the two things needed before the first recording.
+        if (!setupDone) Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Two steps before your first note", style = MaterialTheme.typography.titleSmall)
+                VaultSetup(onChanged = { setupTick++ })
+                ModelSetup(onChanged = { setupTick++ })
+            }
+        }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp).heightIn(min = 72.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -208,78 +206,15 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             }
         }
 
-        cards.firstOrNull()?.let { NoteCard(it, "Last transcript", refresh, canAppend, onAppend) }
-
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Setup", style = MaterialTheme.typography.titleSmall)
-
-                SetupRow("Vault folder", vault?.lastPathSegment?.substringAfter(':') ?: "Not selected") {
-                    OutlinedButton(onClick = { pickVault.launch(null) }) { Text(if (vault == null) "Choose" else "Change") }
-                }
-
-                SetupRow("Speech model", if (modelReady) "Installed" else "Not installed yet") {
-                    if (modelReady) OutlinedButton(enabled = importProgress == -1f,
-                        onClick = { pickModel.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Replace") }
-                }
-                if (!modelReady) {
-                    Text(
-                        "The app never goes online. Download the model (243 MB) once with your browser, then import it.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = {
-                            runCatching {
-                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ModelStore.MODEL_URL)))
-                            }.onFailure { importError = "No browser found to download the model." }
-                        }, modifier = Modifier.weight(1f)) { Text("1. Download") }
-                        Button(enabled = importProgress == -1f,
-                            onClick = { pickModel.launch(arrayOf("application/zip", "application/octet-stream")) },
-                            modifier = Modifier.weight(1f)) { Text("2. Import") }
-                    }
-                }
-                when (val p = importProgress) {
-                    -1f -> {}
-                    null -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    else -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
-                }
-                importError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-
-                Text("Language", style = MaterialTheme.typography.bodyMedium)
-                val options = listOf("auto" to "Auto", "de" to "Deutsch", "en" to "English")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    options.forEachIndexed { i, (code, label) ->
-                        SegmentedButton(
-                            selected = language == code,
-                            onClick = { language = code; prefs.language = code },
-                            shape = SegmentedButtonDefaults.itemShape(i, options.size),
-                        ) { Text(label) }
-                    }
-                }
-            }
-        }
-
+        cards.firstOrNull()?.let { NoteCard(it, "Latest", refresh, canAppend, onAppend) }
         val older = cards.drop(1)
         if (older.isNotEmpty()) {
-            Text("Earlier notes", style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 8.dp))
+            Text("Earlier", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             older.forEach { c -> key(c.id) { NoteCard(c, null, refresh, canAppend, onAppend) } }
         }
-        if (total > limit) OutlinedButton(onClick = { limit += 5 }, modifier = Modifier.fillMaxWidth()) {
+        if (total > limit) OutlinedButton(onClick = { limit += prefs.cardCount }, modifier = Modifier.fillMaxWidth()) {
             Text("Load more (${total - limit} older)")
         }
-    }
-}
-
-@Composable
-private fun SetupRow(label: String, value: String, action: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        action()
     }
 }
 
@@ -317,7 +252,7 @@ private fun isVaultRoot(ctx: android.content.Context, tree: Uri, docId: String):
 }.getOrDefault(false)
 
 /** File picker that starts in the Download folder, where the browser saved the model. */
-private class OpenInDownloads : ActivityResultContracts.OpenDocument() {
+internal class OpenInDownloads : ActivityResultContracts.OpenDocument() {
     override fun createIntent(context: android.content.Context, input: Array<String>): Intent =
         super.createIntent(context, input).putExtra(
             android.provider.DocumentsContract.EXTRA_INITIAL_URI,

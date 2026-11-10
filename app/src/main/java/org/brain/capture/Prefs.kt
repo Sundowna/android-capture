@@ -15,6 +15,16 @@ class Prefs(context: Context) {
         get() = sp.getString("language", "auto")!!
         set(v) = sp.edit().putString("language", v).apply()
 
+    /** How many note cards the main screen shows before "Load more". */
+    var cardCount: Int
+        get() = sp.getInt("cards", 5)
+        set(v) = sp.edit().putInt("cards", v).apply()
+
+    /** "opus" (small, default) or "wav" (lossless, ~8× bigger) for audio saved in the vault. */
+    var audioFormat: String
+        get() = sp.getString("audio", "opus")!!
+        set(v) = sp.edit().putString("audio", v).apply()
+
     var inboxFolder: String
         get() = sp.getString("inbox", "Inbox")!!
         set(v) = sp.edit().putString("inbox", v).apply()

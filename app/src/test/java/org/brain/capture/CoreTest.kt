@@ -176,3 +176,25 @@ class ShareNoteTest {
         assertTrue(NoteText.display(n).startsWith("Shared on"))
     }
 }
+
+class StreamingTest {
+    @Test fun profileAndRangesMatchInMemorySplit() {
+        val rate = 16_000
+        val f = java.io.File.createTempFile("rec", ".wav")
+        try {
+            val speech = ShortArray(rate) { (8000 * kotlin.math.sin(2 * PI * 220 * it / rate)).toInt().toShort() }
+            val silence = ShortArray(rate)
+            org.brain.capture.audio.WavWriter(f, rate).use { w ->
+                repeat(40) { s -> if (s % 10 == 9) w.write(silence, silence.size) else w.write(speech, speech.size) }
+            }
+            val p = org.brain.capture.audio.WavReader.profile(f, Chunker.FRAME_SAMPLES)
+            assertEquals(40L * rate, p.samples)
+            val ranges = Chunker.plan(p.energy, p.samples)
+            val inMemory = Chunker.split(org.brain.capture.audio.WavReader.readFloats(f))
+            assertEquals(inMemory.map { it.size.toLong() }, ranges.map { it.last - it.first + 1 })
+            val piece = org.brain.capture.audio.WavReader.readRange(f, ranges[1].first, ranges[1].last + 1)
+            assertTrue(piece.contentEquals(inMemory[1]))
+            assertTrue(p.mutedFraction in 0.05..0.15) // 4 of 40 seconds are digital silence
+        } finally { f.delete() }
+    }
+}

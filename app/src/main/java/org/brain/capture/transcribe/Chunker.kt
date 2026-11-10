@@ -17,21 +17,31 @@ object Chunker {
     private const val FRAME = RATE * 30 / 1000
     private const val MIN_PAUSE_FRAMES = 6 // 180 ms
 
+    /** Frame length (samples) the energy profile must use. */
+    const val FRAME_SAMPLES = FRAME
+
     fun split(samples: FloatArray): List<FloatArray> {
-        if (samples.size <= MAX) return if (samples.size > RATE / 4) listOf(samples) else emptyList()
         val energy = DoubleArray(samples.size / FRAME) { rms(samples, it * FRAME, FRAME) }
+        return plan(energy, samples.size.toLong()).map { samples.copyOfRange(it.first.toInt(), it.last.toInt() + 1) }
+    }
+
+    /**
+     * Sample ranges for the pieces of a recording of [total] samples, from its 30 ms loudness
+     * profile. Lets long recordings be transcribed piece by piece without loading them whole.
+     */
+    fun plan(energy: DoubleArray, total: Long): List<LongRange> {
+        if (total <= MAX) return if (total > RATE / 4) listOf(0L until total) else emptyList()
         // Background level: twice the quietest tenth, but never above a third of the typical
         // loudness (a recording that is nearly all speech has no quiet tenth to measure).
         val threshold = maxOf(0.002, minOf(2 * percentile(energy, 0.1), 0.3 * percentile(energy, 0.5)))
-
-        val out = ArrayList<FloatArray>()
-        var start = 0
-        while (samples.size - start > MAX) {
-            val cut = cutPoint(energy, threshold, start + MAX - SEARCH, start + MAX)
-            out += samples.copyOfRange(start, cut)
+        val out = ArrayList<LongRange>()
+        var start = 0L
+        while (total - start > MAX) {
+            val cut = cutPoint(energy, threshold, (start + MAX - SEARCH).toInt(), (start + MAX).toInt()).toLong()
+            out += start until cut
             start = cut
         }
-        if (samples.size - start > RATE / 4) out += samples.copyOfRange(start, samples.size)
+        if (total - start > RATE / 4) out += start until total
         return out
     }
 

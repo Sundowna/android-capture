@@ -59,6 +59,10 @@ fun StatusContent(phase: Phase, level: Float) {
                     Spacer(Modifier.width(10.dp))
                     Text("Recording  %d:%02d".format(s / 60, s % 60), style = MaterialTheme.typography.titleLarge)
                 }
+                phase.minutesLeft?.let {
+                    Text("Storage low: about $it min of recording left", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
                 phase.appendTo?.let {
                     Text("Adding to: ${it.substringAfterLast('/').removeSuffix(".md")}",
                         style = MaterialTheme.typography.bodySmall, maxLines = 1)
