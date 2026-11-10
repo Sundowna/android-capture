@@ -121,7 +121,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             prefs.vaultUri = uri; vault = uri
         }
     }
-    val pickModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+    val pickModel = rememberLauncherForActivityResult(OpenInDownloads()) { uri: Uri? ->
         if (uri != null) scope.launch {
             importError = null; importProgress = null
             runCatching {
@@ -204,10 +204,25 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
                     OutlinedButton(onClick = { pickVault.launch(null) }) { Text(if (vault == null) "Choose" else "Change") }
                 }
 
-                SetupRow("Whisper model", if (modelReady) "Installed" else "Not imported") {
-                    OutlinedButton(enabled = importProgress == -1f,
-                        onClick = { pickModel.launch(arrayOf("application/zip", "application/octet-stream")) }) {
-                        Text(if (modelReady) "Replace" else "Import ZIP")
+                SetupRow("Speech model", if (modelReady) "Installed" else "Not installed yet") {
+                    if (modelReady) OutlinedButton(enabled = importProgress == -1f,
+                        onClick = { pickModel.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Replace") }
+                }
+                if (!modelReady) {
+                    Text(
+                        "The app never goes online. Download the model (243 MB) once with your browser, then import it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = {
+                            runCatching {
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ModelStore.MODEL_URL)))
+                            }.onFailure { importError = "No browser found to download the model." }
+                        }, modifier = Modifier.weight(1f)) { Text("1. Download") }
+                        Button(enabled = importProgress == -1f,
+                            onClick = { pickModel.launch(arrayOf("application/zip", "application/octet-stream")) },
+                            modifier = Modifier.weight(1f)) { Text("2. Import") }
                     }
                 }
                 when (val p = importProgress) {
@@ -242,4 +257,13 @@ private fun SetupRow(label: String, value: String, action: @Composable () -> Uni
         }
         action()
     }
+}
+
+/** File picker that starts in the Download folder, where the browser saved the model. */
+private class OpenInDownloads : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: android.content.Context, input: Array<String>): Intent =
+        super.createIntent(context, input).putExtra(
+            android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+            android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download"),
+        )
 }
