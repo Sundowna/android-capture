@@ -66,7 +66,8 @@ class VoicePipeline(private val context: Context) {
             val t1 = SystemClock.elapsedRealtime()
             val parts = chunks.mapIndexed { i, chunk ->
                 CaptureState.set(Phase.Transcribing(i, chunks.size))
-                whisper.transcribe(chunk, lang)
+                // Whisper invents text for silence, so pieces without any speech-level sound are skipped.
+                if (AudioCheck.loudestFrame(chunk) < SPEECH_LEVEL) "" else whisper.transcribe(chunk, lang)
             }
             val text = parts.filter { it.isNotBlank() }.joinToString(" ")
             val txMs = SystemClock.elapsedRealtime() - t1
@@ -110,7 +111,11 @@ class VoicePipeline(private val context: Context) {
             .atZone(ZoneId.systemDefault()).toOffsetDateTime()
     }.getOrElse { java.time.OffsetDateTime.now() }
 
-    companion object { private const val TAG = "VoicePipeline" }
+    companion object {
+        private const val TAG = "VoicePipeline"
+        /** Loudest 100 ms must reach about -48 dBFS; quiet speech is well above, room noise below. */
+        private const val SPEECH_LEVEL = 0.004
+    }
 }
 
 /** Whisper writes tags such as "[BLANK_AUDIO]", "[ Silence ]" or "(heartbeat)" when nobody speaks. */
@@ -126,6 +131,20 @@ object NonSpeech {
 }
 
 object AudioCheck {
+    /** RMS of the loudest 100 ms frame. */
+    fun loudestFrame(samples: FloatArray): Double {
+        val frame = WhisperOnnx.SAMPLE_RATE / 10
+        var best = 0.0
+        var f = 0
+        while (f + frame <= samples.size) {
+            var sum = 0.0
+            for (i in f until f + frame) sum += samples[i] * samples[i]
+            best = maxOf(best, kotlin.math.sqrt(sum / frame))
+            f += frame
+        }
+        return best
+    }
+
     /** Share of 100 ms frames that are exact digital silence, which is what a muted microphone delivers. */
     fun mutedFraction(samples: FloatArray): Double {
         val frame = WhisperOnnx.SAMPLE_RATE / 10

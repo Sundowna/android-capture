@@ -23,8 +23,9 @@ class VaultWriter(context: Context, private val tree: Uri) {
 
     init {
         val granted = cr.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
-        if (!granted) throw VaultUnavailableException("Vault access was revoked")
-        if (!exists(rootId)) throw VaultUnavailableException("Vault folder not found")
+        // Renaming or moving the vault folder also removes the app's access to it.
+        if (!granted || !exists(rootId)) throw VaultUnavailableException(
+            "Vault folder not available (moved, renamed or access removed). Choose it again in the app")
     }
 
     /**

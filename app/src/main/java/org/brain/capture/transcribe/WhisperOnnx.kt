@@ -58,7 +58,8 @@ class WhisperOnnx(modelDir: File) : Closeable {
      */
     fun transcribe(samples: FloatArray, language: String?): String {
         if (samples.size < SAMPLE_RATE / 4) return "" // under 0.25 s: nothing to transcribe
-        val maxTokens = minOf(MAX_TOKENS, ceil(samples.size / SAMPLE_RATE.toDouble() * 30).toInt())
+        // Whisper's decoder has 448 positions in total, and the 4 prefix tokens use some of them.
+        val maxTokens = minOf(MAX_TOKENS - PREFIX_TOKENS, ceil(samples.size / SAMPLE_RATE.toDouble() * 30).toInt())
 
         OnnxTensor.createTensor(env, FloatBuffer.wrap(samples), longArrayOf(1, samples.size.toLong())).use { pcm ->
             initializer.run(mapOf("audio_pcm" to pcm)).use { features ->
@@ -121,7 +122,7 @@ class WhisperOnnx(modelDir: File) : Closeable {
                         if (best in FIRST_LANGUAGE..LAST_LANGUAGE) best else FIRST_LANGUAGE // fall back to English
                     }
                     forced.isNotEmpty() -> forced.removeFirst()
-                    best == EOT || out.size >= maxTokens -> break
+                    best == EOT || out.size >= maxTokens || isLooping(out) -> break
                     else -> { out += best; best }
                 }
             }
@@ -129,6 +130,27 @@ class WhisperOnnx(modelDir: File) : Closeable {
             previous?.close()
         }
         return out.toIntArray()
+    }
+
+    /**
+     * Whisper sometimes gets stuck repeating the same few tokens (mostly on noise or silence).
+     * Stop when the last 1–8 tokens have repeated 4 times in a row; the repeats are dropped.
+     */
+    private fun isLooping(out: ArrayList<Int>): Boolean {
+        for (len in 1..8) {
+            val need = len * 4
+            if (out.size < need) break
+            val tail = out.subList(out.size - len, out.size)
+            var repeats = true
+            for (r in 1 until 4) {
+                if (out.subList(out.size - len * (r + 1), out.size - len * r) != tail) { repeats = false; break }
+            }
+            if (repeats) {
+                repeat(len * 3) { out.removeAt(out.size - 1) }
+                return true
+            }
+        }
+        return false
     }
 
     private fun detokenize(tokens: IntArray): String {
@@ -172,6 +194,7 @@ class WhisperOnnx(modelDir: File) : Closeable {
         private const val HEAD_DIM = 64L
         private val KV = arrayOf("key", "value")
         private const val MAX_TOKENS = 445
+        private const val PREFIX_TOKENS = 4
         private const val EOT = 50257
         private const val SOT = 50258
         private const val FIRST_LANGUAGE = 50259 // "en"
