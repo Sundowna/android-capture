@@ -193,8 +193,8 @@ class CaptureService : Service() {
                     // Retry goes through the app: a microphone-type foreground service may only be
                     // started while the app is visible (Android 14+).
                     if (p.wavPath != null) addAction(Notification.Action.Builder(null, "Retry",
-                        PendingIntent.getActivity(this, 1,
-                            Intent(this, MainActivity::class.java).putExtra(EXTRA_WAV, p.wavPath),
+                        PendingIntent.getActivity(this@CaptureService, 1,
+                            Intent(this@CaptureService, MainActivity::class.java).putExtra(EXTRA_WAV, p.wavPath),
                             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
                 }
             Phase.Idle -> b.setContentTitle("Ready")
