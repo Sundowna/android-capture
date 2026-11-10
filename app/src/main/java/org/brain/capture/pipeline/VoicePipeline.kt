@@ -47,6 +47,8 @@ class VoicePipeline(private val context: Context) {
             appendTo = legacyAppendTarget(wav),
         ).also { dao.upsert(it) }
 
+        CaptureState.processing(wav.path, c.id)
+        CaptureState.live(null)
         try {
             if (c.transcript == null) c = transcribeStep(c, wav)
             CaptureState.set(Phase.WritingVault)
@@ -59,7 +61,9 @@ class VoicePipeline(private val context: Context) {
             File(wav.parentFile, wav.nameWithoutExtension + ".append").delete()
 
             val target = c.appendTo?.let { dao.get(it) }
-            CaptureState.set(Phase.Saved(target?.notePath ?: c.notePath ?: "", c.warning, appended = target != null))
+            CaptureState.live(null)
+            CaptureState.set(Phase.Saved(target?.notePath ?: c.notePath ?: "", c.warning, appended = target != null,
+                captureId = target?.id ?: c.id))
         } catch (e: VaultUnavailableException) {
             Log.w(TAG, "Vault unavailable", e)
             dao.upsert(c.copy(state = CaptureStates.FAILED, error = e.message))
@@ -83,7 +87,7 @@ class VoicePipeline(private val context: Context) {
             else -> null
         }
         // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
-        val r = if (muted > 0.9) LastResult("", seconds, 0, 0, 0) else transcribe(wav, profile, seconds)
+        val r = if (muted > 0.9) LastResult("", seconds, 0, 0, 0) else transcribe(wav, profile, seconds, c.id)
         return c.copy(
             state = CaptureStates.TRANSCRIBED,
             transcript = NonSpeech.strip(r.transcript),
@@ -92,7 +96,7 @@ class VoicePipeline(private val context: Context) {
         ).also { dao.upsert(it) }
     }
 
-    private fun transcribe(wav: File, profile: WavReader.Profile, seconds: Double): LastResult {
+    private fun transcribe(wav: File, profile: WavReader.Profile, seconds: Double, captureId: String): LastResult {
         val store = ModelStore(context)
         if (!store.isInstalled()) error("Speech model not installed")
         CaptureState.set(Phase.LoadingModel)
@@ -102,11 +106,18 @@ class VoicePipeline(private val context: Context) {
             val chunks = Chunker.plan(profile.energy, profile.samples)
             val lang = prefs.language.takeIf { it != "auto" }
             val t1 = SystemClock.elapsedRealtime()
+            val done = ArrayList<String>()
             val parts = chunks.mapIndexed { i, range ->
-                CaptureState.set(Phase.Transcribing(i, chunks.size))
+                // Time left = average time of the finished parts × parts still to do (none before the first).
+                val elapsed = SystemClock.elapsedRealtime() - t1
+                val eta = if (i == 0) null else (elapsed / i * (chunks.size - i) / 1000).toInt()
+                CaptureState.set(Phase.Transcribing(i, chunks.size, eta))
                 val chunk = WavReader.readRange(wav, range.first, range.last + 1)
                 // Pieces without any speech-level sound are skipped (Whisper invents text for silence).
-                if (AudioCheck.loudestFrame(chunk) < SPEECH_LEVEL) "" else whisper.transcribe(chunk, lang)
+                val text = if (AudioCheck.loudestFrame(chunk) < SPEECH_LEVEL) "" else NonSpeech.strip(whisper.transcribe(chunk, lang))
+                if (text.isNotBlank()) done += text
+                CaptureState.live(org.brain.capture.LiveText(captureId, done.joinToString(" ")))
+                text
             }
             val text = parts.filter { it.isNotBlank() }.joinToString(" ")
             val txMs = SystemClock.elapsedRealtime() - t1

@@ -10,69 +10,58 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import kotlinx.coroutines.delay
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
 import org.brain.capture.R
+import org.brain.capture.audio.CaptureService
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.pipeline.Notes
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.lifecycle.compose.LifecycleResumeEffect
-import org.brain.capture.audio.CaptureService
 import org.brain.capture.transcribe.ModelStore
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -82,9 +71,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         retryRequest.value = intent.getBooleanExtra(CaptureService.EXTRA_RETRY, false)
-        setContent {
-            CaptureTheme { Surface(Modifier.fillMaxSize()) { CaptureScreen(retryRequest) } }
-        }
+        setContent { CaptureTheme { App(retryRequest) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -94,48 +81,74 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
+private fun App(retryRequest: MutableState<Boolean>) {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
-    val models = remember { ModelStore(ctx) }
-    val scope = rememberCoroutineScope()
-    val phase by CaptureState.phase.collectAsState()
-    val level by CaptureState.level.collectAsState()
+    var showSettings by remember { mutableStateOf(false) }
+    var setupTick by remember { mutableIntStateOf(0) }
+    val setupDone = remember(showSettings, setupTick) { prefs.vaultUri != null && ModelStore(ctx).isInstalled() }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        when {
+            !setupDone -> FirstRunScreen(onChanged = { setupTick++ })
+            showSettings -> SettingsScreen(onBack = { showSettings = false })
+            else -> HomeScreen(retryRequest, onSettings = { showSettings = true })
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Unit) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
     val dao = remember { CaptureDb.get(ctx).dao() }
+    val phase by CaptureState.phase.collectAsState()
+    val recording by CaptureState.recording.collectAsState()
+    val level by CaptureState.level.collectAsState()
+    val live by CaptureState.live.collectAsState()
     var limit by remember { mutableIntStateOf(prefs.cardCount) }
     val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
     val total by remember { dao.cardCount() }.collectAsState(0)
+    val pendingRows by remember { dao.inProgress() }.collectAsState(emptyList())
+    // Only recordings whose audio still exists, and not the one being recorded right now (the hero shows that).
+    val pending = pendingRows.filter { c -> c.stagingPath?.let { File(it).exists() } == true && c.stagingPath != recording?.file }
+
     // Re-read notes when coming back to the app (e.g. after editing in Obsidian).
     var refresh by remember { mutableIntStateOf(0) }
-    LifecycleResumeEffect(Unit) { refresh++; onPauseOrDispose { } }
+    var resumedAt by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LifecycleResumeEffect(Unit) { refresh++; resumedAt = System.currentTimeMillis(); onPauseOrDispose { } }
     LaunchedEffect(Unit) {
         Notes.importHistory(ctx); Notes.recoverEdits(ctx)
         org.brain.capture.share.Shares.resumePending(ctx) // shares that could not be saved earlier
-    }
-
-    var showSettings by remember { mutableStateOf(false) }
-    var setupTick by remember { mutableIntStateOf(0) }
-    val setupDone = remember(showSettings, setupTick) { prefs.vaultUri != null && models.isInstalled() }
-    var waiting by remember { mutableStateOf(CaptureService.pendingRecordings(ctx).size) }
-    LaunchedEffect(phase) { waiting = CaptureService.pendingRecordings(ctx).size }
-
-    fun processWaiting() = CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING)
-
-    // Recordings left over from an interruption (app killed, phone restarted) are finished
-    // automatically when the app opens. After a failure they wait for Retry instead.
-    LaunchedEffect(Unit) {
-        if (!phase.isBusy && phase !is Phase.Failed && waiting > 0) processWaiting()
+        // Recordings left over from an interruption are finished automatically.
+        if (!phase.isBusy && phase !is Phase.Failed && CaptureService.pendingRecordings(ctx).isNotEmpty())
+            CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING)
     }
     LaunchedEffect(retryRequest.value) {
-        if (retryRequest.value) { retryRequest.value = false; processWaiting() }
+        if (retryRequest.value) { retryRequest.value = false; CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING) }
     }
+
+    // "Saved" highlight on the card for a few seconds, plus a short confirmation with one useful action.
+    val saved = phase as? Phase.Saved
+    var highlightUntil by remember { mutableLongStateOf(0L) }
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(saved?.atMs) {
+        val s = saved ?: return@LaunchedEffect
+        if (s.atMs < resumedAt) return@LaunchedEffect // saved while the app was not visible
+        highlightUntil = s.atMs + 5000
+        val r = snackbar.showSnackbar(
+            message = if (s.appended) "Added to the note" else "Saved to your vault",
+            actionLabel = "Open in Obsidian", duration = SnackbarDuration.Short)
+        if (r == SnackbarResult.ActionPerformed) openInObsidian(ctx, s.notePath)
+    }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(highlightUntil) { while (System.currentTimeMillis() < highlightUntil) { delay(500); now = System.currentTimeMillis() }; now = System.currentTimeMillis() }
 
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.RECORD_AUDIO] == true) CaptureService.send(ctx, CaptureService.ACTION_START)
     }
     fun toggleRecording(appendTo: Capture? = null) {
         when {
-            phase is Phase.Recording -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
+            recording != null -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
             ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED ->
                 CaptureService.send(ctx, CaptureService.ACTION_START) {
                     if (appendTo != null) {
@@ -146,74 +159,71 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             else -> permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS))
         }
     }
-    val canAppend = !phase.isBusy
-    val onAppend: (Capture) -> Unit = { c -> toggleRecording(c) }
+    val canRecord = recording == null
+    val listAlpha by animateFloatAsState(if (recording != null) 0.38f else 1f, label = "dim")
 
-    if (showSettings) {
-        SettingsScreen(onBack = { showSettings = false; limit = maxOf(limit, prefs.cardCount) })
-        return
-    }
-
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Brain Capture", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") }
-        }
-
-        // First run: the two things needed before the first recording.
-        if (!setupDone) Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Two steps before your first note", style = MaterialTheme.typography.titleSmall)
-                VaultSetup(onChanged = { setupTick++ })
-                ModelSetup(onChanged = { setupTick++ })
-            }
-        }
-
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp).heightIn(min = 72.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatusContent(phase, level)
-                if (phase.isBusy && waiting > 0) Text(
-                    if (waiting == 1) "1 more recording is queued and will follow."
-                    else "$waiting more recordings are queued and will follow.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                if (phase is Phase.Failed && waiting > 0) {
-                    Text(
-                        if (waiting == 1) "1 recording is not in the vault yet." else "$waiting recordings are not in the vault yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    FilledTonalButton(onClick = ::processWaiting) { Text("Retry") }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { inner ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(inner),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item("top") {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Brain Capture", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    if (recording == null) IconButton(onClick = onSettings) {
+                        Icon(painterResource(R.drawable.ic_tune), "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
+                        PulsingDot()
+                        Text("  REC", style = MaterialTheme.typography.labelLarge, color = brand().record)
+                    }
                 }
             }
-        }
-
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Button(
-                onClick = { toggleRecording() },
-                enabled = phase is Phase.Recording || !phase.isBusy,
-                shape = CircleShape,
-                modifier = Modifier.size(112.dp).semantics {
-                    contentDescription = if (phase is Phase.Recording) "Stop recording" else "Start recording"
-                },
-                colors = if (phase is Phase.Recording) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                else ButtonDefaults.buttonColors(),
-            ) {
-                if (phase is Phase.Recording) Text("Stop", style = MaterialTheme.typography.titleMedium)
-                else Icon(painterResource(R.drawable.ic_mic), contentDescription = null, Modifier.size(48.dp))
+            item("hero") {
+                RecordHero(recording, level, enabled = true,
+                    idleHint = if (pending.isNotEmpty()) "Tap to capture another thought" else "Tap to capture a thought",
+                    onClick = { toggleRecording() })
             }
-        }
-
-        cards.firstOrNull()?.let { NoteCard(it, "Latest", refresh, canAppend, onAppend) }
-        val older = cards.drop(1)
-        if (older.isNotEmpty()) {
-            Text("Earlier", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-            older.forEach { c -> key(c.id) { NoteCard(c, null, refresh, canAppend, onAppend) } }
-        }
-        if (total > limit) OutlinedButton(onClick = { limit += prefs.cardCount }, modifier = Modifier.fillMaxWidth()) {
-            Text("Load more (${total - limit} older)")
+            // A general problem that is not tied to a recording (e.g. microphone or storage).
+            val failed = phase as? Phase.Failed
+            if (failed != null && failed.wavPath == null && recording == null) item("error") {
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.errorContainer) {
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(failed.message, Modifier.weight(1f).padding(vertical = 14.dp), color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { CaptureState.set(Phase.Idle) }) { Text("OK") }
+                    }
+                }
+            }
+            if (pending.isNotEmpty() || cards.isNotEmpty()) item("label") {
+                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp).alpha(listAlpha))
+            }
+            items(pending, key = { "p-" + it.id }) { c ->
+                Box(Modifier.animateItem().alpha(listAlpha)) {
+                    ProgressCard(c, phase, live, CaptureState.processingId,
+                        onRetry = { CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING) })
+                }
+            }
+            items(cards, key = { it.id }) { c ->
+                val justSaved = saved?.captureId == c.id && now < highlightUntil
+                Box(Modifier.animateItem().alpha(listAlpha)) { NoteCard(c, refresh, justSaved, canRecord) { toggleRecording(it) } }
+            }
+            if (cards.isEmpty() && pending.isEmpty()) item("empty") {
+                Text("Your notes will appear here. Record a thought, or share a link, text or file to Brain Capture from any app.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+            }
+            if (total > limit) item("more") {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TextButton(onClick = { limit += prefs.cardCount }) {
+                        Text("Show ${minOf(prefs.cardCount, total - limit)} more", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
         }
     }
 }

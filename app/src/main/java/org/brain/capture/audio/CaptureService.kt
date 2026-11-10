@@ -22,45 +22,48 @@ import android.os.VibratorManager
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.R
+import org.brain.capture.RecordingInfo
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.data.CaptureStates
-import java.util.UUID
 import org.brain.capture.pipeline.VoicePipeline
 import org.brain.capture.ui.MainActivity
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.sqrt
 
 /**
- * Foreground service that owns the microphone. Records straight to a WAV file in app-private
- * staging, then runs the voice pipeline (transcribe → write to vault) on that file.
+ * Foreground service that owns the microphone and the processing queue.
+ * Recording and processing are independent: a new recording can start while earlier ones are
+ * still being transcribed; finished recordings queue up and are processed one after another.
  */
 class CaptureService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var recordJob: Job? = null
     @Volatile private var stopRequested = false
+    private val procLock = Any()
+    private var processingActive = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        // Keep the notification in step with the pipeline state.
+        // One notification: the recording while there is one, otherwise the processing state.
         scope.launch {
-            CaptureState.phase.collectLatest { p ->
-                if (p !is Phase.Idle) notificationManager().notify(NOTIF_ID, buildNotification(p))
+            combine(CaptureState.recording, CaptureState.phase) { r, p -> r to p }.collectLatest { (r, p) ->
+                if (r != null || p !is Phase.Idle) notificationManager().notify(NOTIF_ID, buildNotification(r, p))
             }
         }
     }
@@ -68,61 +71,65 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO), intent.getStringExtra(EXTRA_APPEND_LABEL))
-            ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else if (!CaptureState.isBusy) stopSelf()
+            ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else maybeFinish()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
-            ACTION_PROCESS_PENDING -> processPending()
+            ACTION_PROCESS_PENDING -> {
+                if (CaptureState.phase.value is Phase.Failed) CaptureState.set(Phase.Idle)
+                if (pendingRecordings(this).isNotEmpty()) ensureProcessing() else maybeFinish()
+            }
         }
         return START_NOT_STICKY
     }
 
+    private fun goForeground() = startForeground(NOTIF_ID,
+        buildNotification(CaptureState.recording.value, CaptureState.phase.value),
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+
     @SuppressLint("MissingPermission")
     /** [appendTo] is the capture id of the note to add to; [appendLabel] its path, for display. */
     private fun startRecording(appendTo: String? = null, appendLabel: String? = null) {
-        if (CaptureState.isBusy) return
+        if (CaptureState.isRecording) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             CaptureState.set(Phase.Failed("Microphone permission missing", null))
-            stopSelf(); return
+            maybeFinish(); return
         }
         // Storage: refuse when there is no room left, warn when it's getting tight.
         val free = stagingDir(this).usableSpace
         if (free < MIN_FREE_TO_START) {
             CaptureState.set(Phase.Failed("Phone storage is full (${free / 1_000_000} MB free). Free up space, then record again.", null))
-            stopSelf(); return
+            maybeFinish(); return
         }
         val minutesLeft = ((free - STOP_BELOW) / BYTES_PER_SECOND / 60).toInt().takeIf { it < 60 }
         val started = System.currentTimeMillis()
-        CaptureState.set(Phase.Recording(started, appendLabel, minutesLeft))
+        val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
+        CaptureState.recording(RecordingInfo(started, file.path, appendLabel, minutesLeft))
         holdWakeLock()
-        startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        goForeground()
         vibrate()
         stopRequested = false
 
-        val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
-        CaptureState.current(file.path)
-        recordJob = scope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             // The row exists from the first second, so an interrupted recording (and its append
             // target) is never forgotten.
-            CaptureDb.get(applicationContext).dao().upsert(Capture(
-                id = UUID.randomUUID().toString(), createdAt = started, state = CaptureStates.RECORDING,
-                stagingPath = file.path, appendTo = appendTo,
-            ))
+            val dao = CaptureDb.get(applicationContext).dao()
+            dao.upsert(Capture(id = UUID.randomUUID().toString(), createdAt = started, state = CaptureStates.RECORDING,
+                stagingPath = file.path, appendTo = appendTo))
             val ok = runCatching {
-                if (record(file)) CaptureDb.get(applicationContext).dao().byStaging(file.path)?.let {
-                    CaptureDb.get(applicationContext).dao().upsert(it.copy(
-                        warning = "Recording stopped early because the phone storage was full."))
+                val storageFull = record(file)
+                dao.byStaging(file.path)?.let { c ->
+                    dao.upsert(c.copy(state = CaptureStates.RECORDED,
+                        warning = if (storageFull) "Recording stopped early because the phone storage was full." else c.warning))
                 }
-            }
-                .onFailure { Log.e(TAG, "Recording failed", it) }
-                .isSuccess
+            }.onFailure { Log.e(TAG, "Recording failed", it) }.isSuccess
             CaptureState.level(0f)
-            if (!ok) {
-                CaptureState.set(Phase.Failed("Recording failed", file.takeIf { it.length() > 44 }?.path))
-                CaptureState.current(null)
-                finish(); return@launch
-            }
+            CaptureState.recording(null)
             vibrate()
-            runPipeline(file)
+            if (!ok && file.length() <= 44) {
+                file.delete()
+                CaptureState.set(Phase.Failed("The microphone could not be started.", null))
+                maybeFinish(); return@launch
+            }
+            ensureProcessing()
         }
     }
 
@@ -137,7 +144,7 @@ class CaptureService : Service() {
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, rate),
         )
         check(recorder.state == AudioRecord.STATE_INITIALIZED) { "Microphone not available" }
-        val buf = ShortArray(rate / 10) // 100 ms
+        val buf = ShortArray(rate / 20) // 50 ms, for a lively level meter
         var lastSync = SystemClock.elapsedRealtime()
         WavWriter(file, rate).use { wav ->
             recorder.startRecording()
@@ -149,7 +156,7 @@ class CaptureService : Service() {
                     wav.write(buf, n)
                     var sum = 0.0
                     for (i in 0 until n) sum += buf[i] * buf[i].toDouble()
-                    CaptureState.level((sqrt(sum / n) / 8000.0).coerceIn(0.0, 1.0).toFloat())
+                    CaptureState.level((sqrt(sum / n) / 6000.0).coerceIn(0.0, 1.0).toFloat())
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastSync > 1000) {
                         wav.sync(); lastSync = now
@@ -161,36 +168,42 @@ class CaptureService : Service() {
                 recorder.release()
             }
         }
-        CaptureState.set(Phase.SavingAudio)
         return storageFull
     }
 
-    /** Transcribes and saves every recording still waiting in staging (after an interruption or failure). */
-    private fun processPending() {
-        if (CaptureState.isBusy) return
-        val waiting = pendingRecordings(this)
-        if (waiting.isEmpty()) { if (!CaptureState.isBusy) stopSelf(); return }
-        CaptureState.set(Phase.LoadingModel)
-        startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+    /** Starts the processing queue unless it is already running. */
+    private fun ensureProcessing() {
+        synchronized(procLock) { if (processingActive) return; processingActive = true }
         holdWakeLock()
-        scope.launch { runPipeline(waiting.first()) }
+        goForeground()
+        scope.launch {
+            val pipeline = VoicePipeline(applicationContext)
+            try {
+                while (true) {
+                    val next = pendingRecordings(this@CaptureService).firstOrNull() ?: break
+                    pipeline.run(next)
+                    if (CaptureState.phase.value is Phase.Failed) break
+                }
+            } finally {
+                CaptureState.processing(null, null)
+                synchronized(procLock) { processingActive = false }
+            }
+            // A recording may have finished in the very moment the queue ended.
+            if (CaptureState.phase.value !is Phase.Failed && pendingRecordings(this@CaptureService).isNotEmpty()) ensureProcessing()
+            else maybeFinish()
+        }
     }
 
-    /** Processes [first], then anything else left in staging, one at a time. Stops at the first failure. */
-    private suspend fun runPipeline(first: File) {
-        val pipeline = VoicePipeline(applicationContext)
-        var next: File? = first
-        val done = HashSet<String>()
-        while (next != null) {
-            done += next.path
-            CaptureState.current(next.path)
-            pipeline.run(next)
-            if (CaptureState.phase.value is Phase.Failed) break
-            next = pendingRecordings(this).firstOrNull { it.path !in done }
-        }
-        CaptureState.current(null)
-        finish()
+    /** Leaves the foreground once nothing is recording or processing. */
+    private fun maybeFinish() {
+        val busy = synchronized(procLock) { processingActive } || CaptureState.isRecording
+        if (busy) return
+        releaseWakeLock()
+        // Leave the final state (saved / failed) visible as a normal, dismissable notification.
+        stopForeground(STOP_FOREGROUND_DETACH)
+        val p = CaptureState.phase.value
+        if (p !is Phase.Idle) notificationManager().notify(NOTIF_ID, buildNotification(null, p))
+        stopSelf()
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -208,14 +221,6 @@ class CaptureService : Service() {
         wakeLock = null
     }
 
-    private fun finish() {
-        releaseWakeLock()
-        // Leave the final state (saved / failed) visible as a normal, dismissable notification.
-        stopForeground(STOP_FOREGROUND_DETACH)
-        notificationManager().notify(NOTIF_ID, buildNotification(CaptureState.phase.value))
-        stopSelf()
-    }
-
     override fun onDestroy() {
         releaseWakeLock()
         stopRequested = true
@@ -231,7 +236,7 @@ class CaptureService : Service() {
         )
     }
 
-    private fun buildNotification(p: Phase): Notification {
+    private fun buildNotification(r: RecordingInfo?, p: Phase): Notification {
         val open = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val b = Notification.Builder(this, CHANNEL)
@@ -239,15 +244,20 @@ class CaptureService : Service() {
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-        when (p) {
-            is Phase.Recording -> b.setContentTitle(if (p.appendTo != null) "Recording · adding to note" else "Recording")
-                .setContentText(p.minutesLeft?.let { "Storage low: about $it min of recording left" })
-                .setUsesChronometer(true).setWhen(p.startedAtMs).setShowWhen(true).setOngoing(true)
+        if (r != null) {
+            return b.setContentTitle(if (r.appendLabel != null) "Recording · adding to note" else "Recording")
+                .setContentText(r.minutesLeft?.let { "Storage low: about $it min of recording left" }
+                    ?: if (CaptureState.isProcessing) "Earlier recording is being transcribed" else null)
+                .setUsesChronometer(true).setWhen(r.startedAtMs).setShowWhen(true).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
-            Phase.SavingAudio -> b.setContentTitle("Saving recording…").setProgress(0, 0, true).setOngoing(true)
+                .build()
+        }
+        when (p) {
             Phase.LoadingModel -> b.setContentTitle("Preparing transcription…").setProgress(0, 0, true).setOngoing(true)
             is Phase.Transcribing -> b.setContentTitle("Transcribing")
-                .setContentText(if (p.total > 1) "Part ${p.done + 1} of ${p.total}" else null)
+                .setContentText(listOfNotNull(
+                    if (p.total > 1) "Part ${p.done + 1} of ${p.total}" else null,
+                    p.etaSeconds?.let { "about ${formatEta(it)} left" }).joinToString(" · ").ifEmpty { null })
                 .setProgress(p.total, p.done, p.total <= 1).setOngoing(true)
             Phase.WritingVault -> b.setContentTitle("Saving to vault…").setProgress(0, 0, true).setOngoing(true)
             is Phase.Saved -> b.setContentTitle(when {
@@ -304,12 +314,16 @@ class CaptureService : Service() {
 
         fun stagingDir(ctx: Context): File = File(ctx.filesDir, "staging").apply { mkdirs() }
 
-        /** Recordings in staging that are not being recorded or processed right now. */
+        /** Recordings in staging that are not being recorded or processed right now, oldest first. */
         fun pendingRecordings(ctx: Context): List<File> {
-            val busyWith = CaptureState.currentFile
-            return stagingDir(ctx).listFiles { f -> f.extension == "wav" && f.length() > 44 && f.path != busyWith }
-                ?.sortedBy { it.name }.orEmpty()
+            val recording = CaptureState.recording.value?.file
+            val processing = CaptureState.processingFile
+            return stagingDir(ctx).listFiles { f ->
+                f.extension == "wav" && f.length() > 44 && f.path != recording && f.path != processing
+            }?.sortedBy { it.name }.orEmpty()
         }
+
+        fun formatEta(s: Int): String = if (s < 60) "${maxOf(5, (s + 4) / 5 * 5)} s" else "${(s + 30) / 60} min"
 
         fun send(ctx: Context, action: String, extra: Intent.() -> Unit = {}) {
             val i = Intent(ctx, CaptureService::class.java).setAction(action).apply(extra)

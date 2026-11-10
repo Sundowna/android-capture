@@ -81,6 +81,10 @@ interface CaptureDao {
     fun cardCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM captures") suspend fun count(): Int
+
+    /** Voice captures not yet in the vault: shown as live cards above the list. */
+    @Query("SELECT * FROM captures WHERE kind = 'voice' AND state IN ('recording','recorded','transcribed','failed') ORDER BY createdAt DESC")
+    fun inProgress(): Flow<List<Capture>>
     @Query("DELETE FROM captures WHERE state = 'discarded'") suspend fun deleteDiscarded()
 
     /** A saved share of the same URL or file since [since], if any. */

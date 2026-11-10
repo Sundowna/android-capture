@@ -39,6 +39,21 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.brain.capture.data.Capture
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
+import org.brain.capture.CaptureState
+import org.brain.capture.R
+import org.brain.capture.audio.CaptureService
+import org.brain.capture.ui.PulsingDot
+import org.brain.capture.ui.brand
 import org.brain.capture.ui.CaptureTheme
 import org.brain.capture.ui.openInObsidian
 import org.brain.capture.vault.VaultUnavailableException
@@ -49,7 +64,10 @@ import java.util.Date
 private sealed interface ShareUi {
     data class Saving(val what: String, val progress: Float?) : ShareUi
     data class Duplicate(val staged: Capture, val earlier: Capture) : ShareUi
-    data class Saved(val notePath: String) : ShareUi
+    /** [title]/[subtitle] say what was saved: the page title and site, the file name, the text. */
+    data class Saved(val notePath: String, val captureId: String, val kind: String, val title: String, val subtitle: String) : ShareUi
+    /** Recording a voice comment that is added to the note just saved. */
+    data class Commenting(val saved: Saved, val stopped: Boolean = false) : ShareUi
     data class Failed(val message: String, val kept: Boolean) : ShareUi
 }
 
@@ -93,19 +111,62 @@ class ShareActivity : ComponentActivity() {
 
     private suspend fun save(staged: Capture) {
         val app = applicationContext
-        ui.value = runCatching { ShareUi.Saved(Shares.save(app, staged.id)) }.getOrElse {
+        ui.value = runCatching { describe(Shares.save(app, staged.id), staged.id) }.getOrElse {
             val msg = if (it is VaultUnavailableException) "${it.message}." else (it.message ?: "Saving failed")
             ShareUi.Failed("$msg It is kept on the phone and will be saved automatically later.", kept = true)
         }
         Shares.resumePending(app) // anything older still waiting
     }
 
+    /** What to show for a saved share, from its database row. */
+    private suspend fun describe(notePath: String, id: String): ShareUi.Saved {
+        val c = org.brain.capture.data.CaptureDb.get(applicationContext).dao().get(id)
+        val lines = c?.transcript.orEmpty().lines().filter { it.isNotBlank() }
+        val source = runCatching { org.json.JSONObject(c?.details ?: "{}").optString("source") }.getOrNull()?.ifEmpty { null }
+        val folder = notePath.substringBeforeLast('/')
+        return when (c?.kind) {
+            "link" -> {
+                val url = lines.firstOrNull { it.startsWith("http") }
+                val title = lines.firstOrNull { !it.startsWith("http") } ?: url ?: "Link"
+                ShareUi.Saved(notePath, id, "link", title, url?.let { ShareParse.domain(it) } ?: folder)
+            }
+            "text" -> ShareUi.Saved(notePath, id, "text", lines.joinToString(" ").take(120), "Text" + (source?.let { " from $it" } ?: ""))
+            else -> ShareUi.Saved(notePath, id, "file", lines.firstOrNull() ?: "File",
+                (if (lines.size > 1) "${lines.size} files" else "File") + (source?.let { " from $it" } ?: ""))
+        }
+    }
+
+    private fun startComment(s: ShareUi.Saved) {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        CaptureService.send(this, CaptureService.ACTION_START) {
+            putExtra(CaptureService.EXTRA_APPEND_TO, s.captureId)
+            putExtra(CaptureService.EXTRA_APPEND_LABEL, s.notePath)
+        }
+        ui.value = ShareUi.Commenting(s)
+    }
+
     @Composable
     private fun Panel() {
         val state by ui.collectAsState()
+        val recording by CaptureState.recording.collectAsState()
+        val level by CaptureState.level.collectAsState()
         val shown = remember { mutableStateOf(false) }
+        var touched by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { shown.value = true }
-        LaunchedEffect(state) { if (state is ShareUi.Saved) { delay(1200); finish() } }
+        // Saved: close by itself after a moment, unless the user is about to add a voice comment.
+        LaunchedEffect(state, touched) {
+            val s = state
+            if (s is ShareUi.Saved && !touched) { delay(3500); if (ui.value === s) finish() }
+            if (s is ShareUi.Commenting && s.stopped) { delay(1500); finish() }
+        }
+        // The comment recording ended (Stop here, in the notification or on the home screen).
+        LaunchedEffect(recording) {
+            val s = ui.value
+            if (s is ShareUi.Commenting && !s.stopped && recording == null) {
+                delay(300)
+                if (CaptureState.recording.value == null) ui.value = s.copy(stopped = true)
+            }
+        }
 
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
@@ -126,8 +187,40 @@ class ShareActivity : ComponentActivity() {
                                 else LinearProgressIndicator(progress = { s.progress }, modifier = Modifier.fillMaxWidth())
                             }
                             is ShareUi.Saved -> {
-                                Text("✓ Saved", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                                Text(s.notePath.substringBeforeLast('/'), style = MaterialTheme.typography.bodySmall)
+                                SavedHeader(s)
+                                if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED && !CaptureState.isRecording)
+                                    OutlinedButton(onClick = { touched = true; startComment(s) },
+                                        modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                                        Icon(painterResource(R.drawable.ic_mic), null, Modifier.size(18.dp))
+                                        Text("  Add a voice comment")
+                                    }
+                            }
+                            is ShareUi.Commenting -> {
+                                SavedHeader(s.saved)
+                                val r = recording
+                                if (!s.stopped && r != null) {
+                                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                                    LaunchedEffect(r.startedAtMs) { while (true) { now = System.currentTimeMillis(); delay(200) } }
+                                    val sec = ((now - r.startedAtMs) / 1000).coerceAtLeast(0)
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        PulsingDot()
+                                        Text("Recording your comment", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                        Text("%d:%02d".format(sec / 60, sec % 60), style = MaterialTheme.typography.titleMedium)
+                                    }
+                                    LinearProgressIndicator(progress = { level }, color = brand().record,
+                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)))
+                                    Button(onClick = { CaptureService.send(this@ShareActivity, CaptureService.ACTION_STOP) },
+                                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = brand().record, contentColor = Color.White)) {
+                                        Text("Stop")
+                                    }
+                                } else if (s.stopped) {
+                                    Text("Your comment will be added to this note.", style = MaterialTheme.typography.bodyMedium)
+                                } else {
+                                    Text("Starting microphone…", style = MaterialTheme.typography.bodyMedium)
+                                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                                }
                             }
                             is ShareUi.Duplicate -> {
                                 val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(s.earlier.createdAt))
@@ -164,3 +257,36 @@ class ShareActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
+
+/** Green confirmation plus a small card with what was saved (title and site, file name, or text). */
+@Composable
+private fun SavedHeader(s: ShareUi.Saved) {
+    val b = brand()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(36.dp).clip(CircleShape).background(b.successBg), contentAlignment = Alignment.Center) {
+            Icon(painterResource(R.drawable.ic_check), null, Modifier.size(19.dp), tint = b.success)
+        }
+        Column {
+            Text(when (s.kind) { "link" -> "Link saved"; "text" -> "Text saved"; else -> "Saved" },
+                style = MaterialTheme.typography.titleMedium)
+            Text(s.notePath.substringBeforeLast('/'), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.background).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        val (bg, fg, icon) = when (s.kind) {
+            "link" -> Triple(b.linkBg, b.link, R.drawable.ic_link)
+            "text" -> Triple(b.voiceBg, b.voice, R.drawable.ic_text)
+            else -> Triple(b.fileBg, b.file, R.drawable.ic_doc)
+        }
+        Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(bg), contentAlignment = Alignment.Center) {
+            Icon(painterResource(icon), null, Modifier.size(16.dp), tint = fg)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(s.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(s.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
+}
+

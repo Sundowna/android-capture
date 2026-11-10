@@ -11,3 +11,14 @@
 | Privacy audit, emoji font fetch removed | See privacy-audit.md |
 
 Unit tests: 31 pass (incl. streaming profile/ranges matching the in-memory split).
+
+## UX pass (2026-11-10)
+
+Built from the approved redesign mockup (https://claude.ai/artifact/BGaX1n6EYoVXkw6G35YxBo):
+
+- Recording and processing are independent: a new recording can start while earlier ones are transcribed; recordings queue and are processed in order. Device check: a 2-minute clip and a recording made while it was processing were both saved in order; queue, service and wake lock cleared afterwards.
+- Brand theme in light and dark mode; home screen with one big record button that turns into a red stop button with rings, large timer and live level bars; list dims while recording.
+- New recordings appear at once as a card with real progress (part x of y, time left from finished parts) and the text filling in part by part; failed ones show "Try again" in the card.
+- Saved: card header turns green for a few seconds, plus a short "Saved to your vault · Open in Obsidian" message.
+- Cards: type tiles (voice, link, text, file), relative times, link title and site, file previews, long text folded with "Show all", timings only when expanded.
+- First-run screen with two steps; share panel shows what was saved and offers "Add a voice comment".
