@@ -32,6 +32,10 @@ data class Capture(
     @PrimaryKey val id: String,
     val createdAt: Long,
     val state: String,
+    /** "voice", "link", "text" or "file". */
+    val kind: String = "voice",
+    /** URL or file SHA-256 of a share, to spot the same thing being shared twice. */
+    val fingerprint: String? = null,
     val stagingPath: String? = null,
     /** Id of the capture whose note this recording is added to. */
     val appendTo: String? = null,
@@ -75,6 +79,14 @@ interface CaptureDao {
     fun cardCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM captures") suspend fun count(): Int
+
+    /** A saved share of the same URL or file since [since], if any. */
+    @Query("SELECT * FROM captures WHERE fingerprint = :fp AND state = 'saved' AND createdAt >= :since ORDER BY createdAt DESC LIMIT 1")
+    suspend fun recentShare(fp: String, since: Long): Capture?
+
+    /** Shares staged but not yet in the vault (interrupted or failed). */
+    @Query("SELECT * FROM captures WHERE kind != 'voice' AND state != 'saved' ORDER BY createdAt")
+    suspend fun pendingShares(): List<Capture>
     @Query("UPDATE captures SET lastActivityAt = :at WHERE id = :id") suspend fun touch(id: String, at: Long)
     @Query("UPDATE captures SET notePath = :path WHERE id = :id") suspend fun moveNote(id: String, path: String)
 
@@ -83,14 +95,22 @@ interface CaptureDao {
     @Query("SELECT * FROM pending_edits") suspend fun pendingEdits(): List<PendingEdit>
 }
 
-@Database(entities = [Capture::class, PendingEdit::class], version = 1, exportSchema = false)
+@Database(entities = [Capture::class, PendingEdit::class], version = 2, exportSchema = false)
 abstract class CaptureDb : RoomDatabase() {
     abstract fun dao(): CaptureDao
 
     companion object {
+        private val V1_TO_V2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE captures ADD COLUMN kind TEXT NOT NULL DEFAULT 'voice'")
+                db.execSQL("ALTER TABLE captures ADD COLUMN fingerprint TEXT")
+            }
+        }
+
         @Volatile private var instance: CaptureDb? = null
         fun get(ctx: Context): CaptureDb = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(ctx.applicationContext, CaptureDb::class.java, "captures.db").build()
+            instance ?: Room.databaseBuilder(ctx.applicationContext, CaptureDb::class.java, "captures.db")
+                .addMigrations(V1_TO_V2).build()
                 .also { instance = it }
         }
     }

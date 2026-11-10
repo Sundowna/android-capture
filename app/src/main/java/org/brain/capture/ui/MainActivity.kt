@@ -107,7 +107,10 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     // Re-read notes when coming back to the app (e.g. after editing in Obsidian).
     var refresh by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) { refresh++; onPauseOrDispose { } }
-    LaunchedEffect(Unit) { Notes.importHistory(ctx); Notes.recoverEdits(ctx) }
+    LaunchedEffect(Unit) {
+        Notes.importHistory(ctx); Notes.recoverEdits(ctx)
+        org.brain.capture.share.Shares.resumePending(ctx) // shares that could not be saved earlier
+    }
 
     var vault by remember { mutableStateOf(prefs.vaultUri) }
     var modelReady by remember { mutableStateOf(models.isInstalled()) }

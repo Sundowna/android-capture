@@ -108,3 +108,55 @@ class ChunkerTest {
         assertTrue("cut at $first s", first in 24.0..25.0)
     }
 }
+
+class ShareParseTest {
+    @Test fun firefoxLinkWithTitleAsSubject() {
+        val l = org.brain.capture.share.ShareParse.link("https://example.org/a?b=1", "Example page")!!
+        assertEquals("https://example.org/a?b=1", l.url)
+        assertEquals("Example page", l.title)
+        assertNull(l.extraText)
+    }
+
+    @Test fun titleAndLinkInText() {
+        val l = org.brain.capture.share.ShareParse.link("Great article https://example.org/x.", null)!!
+        assertEquals("https://example.org/x", l.url)
+        assertEquals("Great article", l.title)
+    }
+
+    @Test fun quoteWithLinkKeepsQuote() {
+        val l = org.brain.capture.share.ShareParse.link("First line of a quote\nsecond line\nhttps://example.org", "Title")!!
+        assertEquals("Title", l.title)
+        assertEquals("First line of a quote\nsecond line", l.extraText)
+    }
+
+    @Test fun plainTextIsNotALink() = assertNull(org.brain.capture.share.ShareParse.link("just some words", null))
+
+    @Test fun domain() = assertEquals("example.org", org.brain.capture.share.ShareParse.domain("https://www.example.org/path?q"))
+
+    @Test fun fileKinds() {
+        assertEquals("PDF", org.brain.capture.share.ShareParse.fileKind(listOf("application/pdf")))
+        assertEquals("Image", org.brain.capture.share.ShareParse.fileKind(listOf("image/jpeg", "image/png")))
+        assertEquals("File", org.brain.capture.share.ShareParse.fileKind(listOf("image/jpeg", "application/pdf")))
+    }
+}
+
+class ShareNoteTest {
+    private val at = OffsetDateTime.of(2026, 11, 10, 19, 0, 0, 0, ZoneOffset.UTC)
+
+    @Test fun linkNoteHasUrlTitleAndId() {
+        val n = NoteBuilder.linkNote("id-1", at, "https://example.org", "A \"quoted\" title: yes", null, "org.mozilla.firefox")
+        assertTrue(n.contains("url: \"https://example.org\""))
+        assertTrue(n.contains("title: \"A \\\"quoted\\\" title: yes\""))
+        assertTrue(n.contains("source_app: org.mozilla.firefox"))
+        assertEquals("id-1", NoteText.captureId(n))
+        assertTrue(NoteText.display(n).contains("<https://example.org>"))
+    }
+
+    @Test fun fileNoteEmbedsPdfAndLinksOthers() {
+        val n = NoteBuilder.fileNote("id-2", at, listOf(
+            NoteBuilder.SharedFile("doc.pdf", "application/pdf", 10, "aa"),
+            NoteBuilder.SharedFile("data.csv", "text/csv", 5, "bb")), null, null)
+        assertTrue(n.contains("![[doc.pdf]]"))
+        assertTrue(n.contains("\n[[data.csv]]"))
+    }
+}

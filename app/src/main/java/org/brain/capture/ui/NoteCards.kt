@@ -71,12 +71,17 @@ fun NoteCard(c: Capture, title: String?, refresh: Int, canRecord: Boolean, onRec
                         Modifier.padding(end = 8.dp).clickable(enabled = view?.fromVault == true) { editing = true })
                 }
             }
+            val date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                .format(java.util.Date(c.createdAt))
             Text(
-                "%s · %.0f s audio · transcription %.1f s · %.2f× · %d part(s)".format(
-                    java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
-                        .format(java.util.Date(c.createdAt)),
-                    c.audioSeconds, c.transcribeMs / 1000.0,
-                    if (c.audioSeconds > 0) c.transcribeMs / 1000.0 / c.audioSeconds else 0.0, c.chunks),
+                when (c.kind) {
+                    "voice" -> "%s · %.0f s audio · transcription %.1f s · %.2f× · %d part(s)".format(
+                        date, c.audioSeconds, c.transcribeMs / 1000.0,
+                        if (c.audioSeconds > 0) c.transcribeMs / 1000.0 / c.audioSeconds else 0.0, c.chunks)
+                    "link" -> "$date · shared link"
+                    "text" -> "$date · shared text"
+                    else -> "$date · shared file"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 8.dp),
