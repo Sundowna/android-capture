@@ -51,4 +51,6 @@ The `Benchmark:` line gives exact timings.
 - Run 3 (same day, after the fixes):
   - Resumed 4.6-minute recording (cut off by an app update) crashed the decoder: a near-silent piece made Whisper loop until it passed the 448 decoder positions. Fixed by capping tokens (prefix included), a repetition stop and skipping pieces below about -48 dBFS. Afterwards: 275.7 s in 19.7 s, 11 pieces, no error.
   - Test 9: renaming the vault folder makes Android **drop the app's folder access**; renaming it back does not restore it. Both recordings were kept, the error message now says to choose the folder again, and after re-selecting it and tapping Retry both recordings were saved in order. Staging empty afterwards.
-- Phase 1 checks complete. Not yet tested: the new quick-record panel (needs user feedback), ZIP model import.
+- Quick-record panel: user feedback "good".
+- Model setup without internet permission (browser download → Import, SHA-256 checked): worked on the first try. The imported files are byte-identical in size to Whisper+'s, and a 3 s test recording transcribed and saved.
+- **Phase 1 complete.**
