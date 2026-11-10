@@ -1,0 +1,24 @@
+# Gradle / Android Studio
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Models are large and imported on the device, never committed
+*.onnx
+*.ort
+whisper_*.zip
+models/
+
+# Never commit vault content or real captures
+vault-test/
+*.wav
+*.m4a
