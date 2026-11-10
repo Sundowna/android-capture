@@ -30,6 +30,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -273,6 +274,12 @@ private fun TranscriptCard(entry: HistoryEntry, title: String?, canAppend: Boole
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
+                if (entry.notePath != null) IconButton(onClick = {
+                    if (!openInObsidian(ctx, entry.notePath)) android.widget.Toast.makeText(ctx,
+                        "Could not open Obsidian. Is it installed?", android.widget.Toast.LENGTH_SHORT).show()
+                }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = "Open note in Obsidian")
+                }
                 if (entry.notePath != null) IconButton(onClick = { onAppend(entry) }, enabled = canAppend,
                     modifier = Modifier.size(48.dp)) {
                     Icon(painterResource(R.drawable.ic_mic_add), contentDescription = "Record more for this note")
@@ -302,6 +309,23 @@ private fun SetupRow(label: String, value: String, action: @Composable () -> Uni
         }
         action()
     }
+}
+
+/**
+ * Opens [notePath] (relative to the chosen vault folder) in Obsidian. Uses Obsidian's `path`
+ * parameter with the absolute file path, so it works whether the chosen folder is the vault
+ * itself or a folder inside it.
+ */
+private fun openInObsidian(ctx: android.content.Context, notePath: String): Boolean {
+    val tree = Prefs(ctx).vaultUri ?: return false
+    val docId = android.provider.DocumentsContract.getTreeDocumentId(tree) // e.g. "primary:Documents/Vault"
+    val volume = docId.substringBefore(':')
+    val root = if (volume == "primary") "/storage/emulated/0" else "/storage/$volume"
+    val absolute = listOf(root, docId.substringAfter(':', ""), notePath).filter { it.isNotEmpty() }.joinToString("/")
+    val uri = Uri.parse("obsidian://open?path=" + Uri.encode(absolute))
+    return runCatching {
+        ctx.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.isSuccess
 }
 
 /** File picker that starts in the Download folder, where the browser saved the model. */
