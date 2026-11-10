@@ -4,12 +4,14 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import org.brain.capture.CaptureState
-import org.brain.capture.HistoryEntry
-import org.brain.capture.TranscriptHistory
 import org.brain.capture.LastResult
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
+import org.brain.capture.audio.OpusEncoder
 import org.brain.capture.audio.WavReader
+import org.brain.capture.data.Capture
+import org.brain.capture.data.CaptureDb
+import org.brain.capture.data.CaptureStates
 import org.brain.capture.transcribe.Chunker
 import org.brain.capture.transcribe.ModelStore
 import org.brain.capture.transcribe.WhisperOnnx
@@ -17,7 +19,9 @@ import org.brain.capture.vault.NoteBuilder
 import org.brain.capture.vault.VaultUnavailableException
 import org.brain.capture.vault.VaultWriter
 import java.io.File
+import java.time.Instant
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -25,54 +29,70 @@ import java.util.UUID
 
 /**
  * Recording on disk → transcript → audio + note in the vault.
- * The staging WAV is deleted only after both files are safely in the vault, so a failure at
- * any step leaves the recording available for Retry.
+ * Every finished step is stored in the capture database, so a retry continues where it stopped:
+ * no second transcription, no duplicate audio file, no second note or double append.
+ * The staging WAV is deleted only after everything is safely in the vault.
  */
 class VoicePipeline(private val context: Context) {
     private val prefs = Prefs(context)
+    private val dao = CaptureDb.get(context).dao()
 
     suspend fun run(wav: File) {
+        var c = dao.byStaging(wav.path) ?: Capture(
+            // A recording from before the database existed: give it a row now.
+            id = UUID.randomUUID().toString(),
+            createdAt = capturedAt(wav).toInstant().toEpochMilli(),
+            state = CaptureStates.RECORDED,
+            stagingPath = wav.path,
+            appendTo = legacyAppendTarget(wav),
+        ).also { dao.upsert(it) }
+
         try {
-            val samples = WavReader.readFloats(wav)
-            val seconds = samples.size / WhisperOnnx.SAMPLE_RATE.toDouble()
-            val muted = AudioCheck.mutedFraction(samples)
-            val warning = when {
-                muted > 0.9 -> "No sound was recorded. Is the microphone turned off in Quick Settings?"
-                muted > 0.3 -> "The microphone was off for part of this recording."
-                else -> null
-            }
-            // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
-            val transcript = if (muted > 0.9) "" else NonSpeech.strip(transcribe(samples, seconds))
+            if (c.transcript == null) c = transcribeStep(c, wav)
             CaptureState.set(Phase.WritingVault)
-            val target = appendTarget(wav).takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null }
-            val (path, appended) = writeToVault(wav, seconds, transcript, warning, target)
+            val vault = VaultWriter(context, prefs.vaultUri ?: throw VaultUnavailableException("No vault folder selected"))
+            if (c.audioVaultName == null) c = audioStep(c, wav, vault)
+            c = noteStep(c, vault)
+            c = c.copy(state = CaptureStates.SAVED, error = null).also { dao.upsert(it) }
             wav.delete()
-            appendTarget(wav).delete()
-            CaptureState.set(Phase.Saved(path, warning, appended))
-            CaptureState.last.value?.let { r ->
-                val entry = HistoryEntry(
-                    atMs = capturedAt(wav).toInstant().toEpochMilli(),
-                    transcript = transcript,
-                    audioSeconds = seconds,
-                    modelLoadMs = r.modelLoadMs,
-                    transcribeMs = r.transcribeMs,
-                    chunks = r.chunks,
-                    notePath = path,
-                )
-                if (!appended || !TranscriptHistory.extend(context, path, entry)) TranscriptHistory.add(context, entry)
-            }
+            File(wav.path.removeSuffix(".wav") + ".ogg").delete()
+            File(wav.parentFile, wav.nameWithoutExtension + ".append").delete()
+
+            val target = c.appendTo?.let { dao.get(it) }
+            CaptureState.set(Phase.Saved(target?.notePath ?: c.notePath ?: "", c.warning, appended = target != null))
         } catch (e: VaultUnavailableException) {
             Log.w(TAG, "Vault unavailable", e)
+            dao.upsert(c.copy(state = CaptureStates.FAILED, error = e.message))
             CaptureState.set(Phase.Failed("${e.message}. Recording kept.", wav.path))
         } catch (t: Throwable) {
             Log.e(TAG, "Pipeline failed", t)
+            dao.upsert(c.copy(state = CaptureStates.FAILED, error = t.message))
             CaptureState.set(Phase.Failed(t.message ?: t.javaClass.simpleName, wav.path))
         }
     }
 
-    private fun transcribe(samples: FloatArray, seconds: Double): String {
+    private suspend fun transcribeStep(c: Capture, wav: File): Capture {
+        val samples = WavReader.readFloats(wav)
+        val seconds = samples.size / WhisperOnnx.SAMPLE_RATE.toDouble()
+        val muted = AudioCheck.mutedFraction(samples)
+        val warning = when {
+            muted > 0.9 -> "No sound was recorded. Is the microphone turned off in Quick Settings?"
+            muted > 0.3 -> "The microphone was off for part of this recording."
+            else -> null
+        }
+        // Whisper invents text for silence, so don't transcribe a recording with no sound at all.
+        val r = if (muted > 0.9) LastResult("", seconds, 0, 0, 0) else transcribe(samples, seconds)
+        return c.copy(
+            state = CaptureStates.TRANSCRIBED,
+            transcript = NonSpeech.strip(r.transcript),
+            audioSeconds = seconds, modelLoadMs = r.modelLoadMs, transcribeMs = r.transcribeMs, chunks = r.chunks,
+            warning = warning,
+        ).also { dao.upsert(it) }
+    }
+
+    private fun transcribe(samples: FloatArray, seconds: Double): LastResult {
         val store = ModelStore(context)
-        if (!store.isInstalled()) error("Whisper model not imported")
+        if (!store.isInstalled()) error("Speech model not installed")
         CaptureState.set(Phase.LoadingModel)
         val t0 = SystemClock.elapsedRealtime()
         WhisperOnnx(store.dir).use { whisper ->
@@ -82,63 +102,96 @@ class VoicePipeline(private val context: Context) {
             val t1 = SystemClock.elapsedRealtime()
             val parts = chunks.mapIndexed { i, chunk ->
                 CaptureState.set(Phase.Transcribing(i, chunks.size))
-                // Whisper invents text for silence, so pieces without any speech-level sound are skipped.
+                // Pieces without any speech-level sound are skipped (Whisper invents text for silence).
                 if (AudioCheck.loudestFrame(chunk) < SPEECH_LEVEL) "" else whisper.transcribe(chunk, lang)
             }
             val text = parts.filter { it.isNotBlank() }.joinToString(" ")
             val txMs = SystemClock.elapsedRealtime() - t1
-            CaptureState.result(LastResult(text, seconds, loadMs, txMs, chunks.size))
+            val r = LastResult(text, seconds, loadMs, txMs, chunks.size)
+            CaptureState.result(r)
             Log.i(TAG, "Benchmark: audio=%.1fs load=%dms transcribe=%dms chunks=%d rtf=%.2f"
                 .format(seconds, loadMs, txMs, chunks.size, txMs / 1000.0 / seconds))
-            return text
+            return r
         }
     }
 
-    /**
-     * Saves the audio, then either appends to the note [appendTo] or creates a new note.
-     * Returns the note's vault path and whether it was an append.
-     */
-    private fun writeToVault(wav: File, seconds: Double, transcript: String, warning: String?, appendTo: String?): Pair<String, Boolean> {
-        val tree = prefs.vaultUri ?: throw VaultUnavailableException("No vault folder selected")
-        val vault = VaultWriter(context, tree)
+    /** Puts the recording into the vault as Opus (.ogg); falls back to WAV if encoding fails. */
+    private suspend fun audioStep(c: Capture, wav: File, vault: VaultWriter): Capture {
         val inbox = prefs.inboxFolder.trim('/')
         val at = capturedAt(wav)
-        val base = NoteBuilder.baseName(at, "Voice", transcript)
-
         vault.cleanupTemp("$inbox/Attachments")
-        vault.cleanupTemp("$inbox/Voice")
-        // Audio first, so a note never links to a missing file.
-        val audioName = vault.write("$inbox/Attachments", NoteBuilder.baseName(at, "Voice", null), "wav") { out ->
-            wav.inputStream().use { it.copyTo(out, 1 shl 16) }
+        val ogg = File(wav.path.removeSuffix(".wav") + ".ogg")
+        val encoded = runCatching { OpusEncoder.encode(wav, ogg); true }
+            .onFailure { Log.w(TAG, "Opus encoding failed, keeping WAV", it) }.getOrDefault(false)
+        val source = if (encoded) ogg else wav
+        val name = vault.write("$inbox/Attachments", NoteBuilder.baseName(at, "Voice", null), source.extension) { out ->
+            source.inputStream().use { it.copyTo(out, 1 shl 16) }
         }
-        if (appendTo != null &&
-            vault.append(appendTo, NoteBuilder.appendBlock(at, transcript, audioName, warning))) {
-            return appendTo to true
-        }
-        // The note to add to is gone (renamed, moved or deleted): keep the addition as its own note.
-        val body = if (appendTo == null) transcript
-        else "Addition to [[${appendTo.substringAfterLast('/').removeSuffix(".md")}]]\n\n$transcript"
-        val note = NoteBuilder.voiceNote(
-            captureId = UUID.randomUUID().toString(),
-            at = at,
-            durationSec = seconds,
-            audioFile = audioName,
-            transcript = body,
-            model = "whisper-small-int8 (onnx)",
-            language = prefs.language,
-            warning = warning,
-        )
-        val noteName = vault.write("$inbox/Voice", base, "md") { it.write(note.toByteArray()) }
-        return "$inbox/Voice/$noteName" to false
+        Log.i(TAG, "Audio saved: $name (${source.length() / 1024} KB, WAV was ${wav.length() / 1024} KB)")
+        return c.copy(audioVaultName = name).also { dao.upsert(it) }
     }
 
-    private fun appendTarget(wav: File) = org.brain.capture.audio.CaptureService.appendTarget(wav)
+    private suspend fun noteStep(c: Capture, vault: VaultWriter): Capture {
+        val inbox = prefs.inboxFolder.trim('/')
+        val at = OffsetDateTime.ofInstant(Instant.ofEpochMilli(c.createdAt), ZoneId.systemDefault())
+        val transcript = c.transcript.orEmpty()
+
+        val target = c.appendTo?.let { dao.get(it) }
+        if (target != null && !c.appended) {
+            val path = Notes.locate(context, vault, target)
+            if (path != null) {
+                // If an earlier attempt already appended (crash before the database update), don't do it twice.
+                val already = vault.read(path)?.contains("![[${c.audioVaultName}]]") == true
+                if (already || vault.append(path, NoteBuilder.appendBlock(at, transcript, c.audioVaultName, c.warning))) {
+                    dao.touch(target.id, System.currentTimeMillis())
+                    return c.copy(appended = true).also { dao.upsert(it) }
+                }
+            }
+            // The note to add to is gone: keep the addition as its own note, linked to the original.
+        }
+        if (c.appended) return c
+
+        if (c.notePath == null) {
+            vault.cleanupTemp("$inbox/Voice")
+            // A note may already exist from an attempt that crashed before the database update.
+            val existing = vault.findNoteById(c.id, maxFiles = 500, startFolder = "$inbox/Voice")
+            val path = existing ?: run {
+                val body = if (c.appendTo == null) transcript
+                else "Addition to [[${target?.notePath?.substringAfterLast('/')?.removeSuffix(".md") ?: "earlier note"}]]\n\n$transcript"
+                val note = NoteBuilder.voiceNote(
+                    captureId = c.id,
+                    at = at,
+                    durationSec = c.audioSeconds,
+                    audioFile = c.audioVaultName ?: "",
+                    transcript = body,
+                    model = "whisper-small-int8 (onnx)",
+                    language = prefs.language,
+                    warning = c.warning,
+                )
+                val name = vault.write("$inbox/Voice", NoteBuilder.baseName(at, "Voice", transcript), "md") {
+                    it.write(note.toByteArray())
+                }
+                "$inbox/Voice/$name"
+            }
+            // An orphaned addition becomes a card of its own.
+            return c.copy(notePath = path, appendTo = null, lastActivityAt = System.currentTimeMillis())
+                .also { dao.upsert(it) }
+        }
+        return c
+    }
+
+    /** Append target written by the previous app version next to the recording. */
+    private suspend fun legacyAppendTarget(wav: File): String? {
+        val f = File(wav.parentFile, wav.nameWithoutExtension + ".append")
+        val path = f.takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null } ?: return null
+        return dao.byNote(path)?.id
+    }
 
     /** The staging file name holds the recording start time (yyyy-MM-dd_HHmmss). */
     private fun capturedAt(wav: File) = runCatching {
         LocalDateTime.parse(wav.nameWithoutExtension, DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss", Locale.ROOT))
             .atZone(ZoneId.systemDefault()).toOffsetDateTime()
-    }.getOrElse { java.time.OffsetDateTime.now() }
+    }.getOrElse { OffsetDateTime.now() }
 
     companion object {
         private const val TAG = "VoicePipeline"

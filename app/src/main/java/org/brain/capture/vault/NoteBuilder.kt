@@ -47,14 +47,16 @@ object NoteBuilder {
     private val TIME = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT)
 
     /** Text added to the end of an existing note when the user records more for it. */
-    fun appendBlock(at: OffsetDateTime, transcript: String, audioFile: String, warning: String?): String = buildString {
+    fun appendBlock(at: OffsetDateTime, transcript: String, audioFile: String?, warning: String?, typed: Boolean = false): String = buildString {
         appendLine()
-        appendLine("**Added ${at.format(TIME)}**")
+        appendLine("**Added ${at.format(TIME)}${if (typed) " (typed)" else ""}**")
         appendLine()
         warning?.let { appendLine("> [!warning] $it"); appendLine() }
         appendLine(transcript.ifBlank { "_(no speech recognised)_" })
-        appendLine()
-        appendLine("![[${audioFile}]]")
+        if (audioFile != null) {
+            appendLine()
+            appendLine("![[${audioFile}]]")
+        }
     }
 
     private fun formatDuration(sec: Double): String {

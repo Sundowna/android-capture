@@ -11,3 +11,10 @@ Production voice capture, plus decisions made while testing phase 1.
 7. Proper voice-activity detection for splitting long recordings.
 8. No duplicate audio when a retry follows a partly saved capture.
 9. Unit tests: note builder, file names, chunking, silence filter, history.
+
+## Status (2026-11-10, first pass)
+
+Built and unit-tested (20 tests pass); items 1–9 are in the code. Device results so far:
+- 126 s German recording: transcribed in 51 s (6 pieces, split at pauses), Opus file 512 KB instead of 3.9 MB WAV. The phone's Opus encoder runs at about 33 kbit/s even when asked for 24.
+- Opus encoding first took 104 s (one packet drained per loop); fixed, now ~4 s.
+- Not yet checked on the phone: card UI (live note text, Load more), in-app edit, typed addition, edit made in Obsidian showing on the card, moved-note lookup.

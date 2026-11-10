@@ -63,9 +63,13 @@ import kotlinx.coroutines.withContext
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
-import org.brain.capture.HistoryEntry
 import org.brain.capture.R
-import org.brain.capture.TranscriptHistory
+import org.brain.capture.data.Capture
+import org.brain.capture.data.CaptureDb
+import org.brain.capture.pipeline.Notes
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import org.brain.capture.audio.CaptureService
 import org.brain.capture.transcribe.ModelStore
 
@@ -96,8 +100,14 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     val scope = rememberCoroutineScope()
     val phase by CaptureState.phase.collectAsState()
     val level by CaptureState.level.collectAsState()
-    val history by TranscriptHistory.entries.collectAsState()
-    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { TranscriptHistory.load(ctx) } }
+    val dao = remember { CaptureDb.get(ctx).dao() }
+    var limit by remember { mutableIntStateOf(5) }
+    val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
+    val total by remember { dao.cardCount() }.collectAsState(0)
+    // Re-read notes when coming back to the app (e.g. after editing in Obsidian).
+    var refresh by remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(Unit) { refresh++; onPauseOrDispose { } }
+    LaunchedEffect(Unit) { Notes.importHistory(ctx); Notes.recoverEdits(ctx) }
 
     var vault by remember { mutableStateOf(prefs.vaultUri) }
     var modelReady by remember { mutableStateOf(models.isInstalled()) }
@@ -139,18 +149,21 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
         }
     }
 
-    fun toggleRecording(appendTo: String? = null) {
+    fun toggleRecording(appendTo: Capture? = null) {
         when {
             phase is Phase.Recording -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
             ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED ->
                 CaptureService.send(ctx, CaptureService.ACTION_START) {
-                    if (appendTo != null) putExtra(CaptureService.EXTRA_APPEND_TO, appendTo)
+                    if (appendTo != null) {
+                        putExtra(CaptureService.EXTRA_APPEND_TO, appendTo.id)
+                        putExtra(CaptureService.EXTRA_APPEND_LABEL, appendTo.notePath)
+                    }
                 }
             else -> permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS))
         }
     }
     val canAppend = !phase.isBusy
-    val onAppend: (HistoryEntry) -> Unit = { e -> e.notePath?.let { toggleRecording(it) } }
+    val onAppend: (Capture) -> Unit = { c -> toggleRecording(c) }
 
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -192,7 +205,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             }
         }
 
-        history.firstOrNull()?.let { TranscriptCard(it, "Last transcript", canAppend, onAppend) }
+        cards.firstOrNull()?.let { NoteCard(it, "Last transcript", refresh, canAppend, onAppend) }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -244,58 +257,14 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             }
         }
 
-        val older = history.drop(1)
+        val older = cards.drop(1)
         if (older.isNotEmpty()) {
-            Text("Earlier transcripts", style = MaterialTheme.typography.titleSmall,
+            Text("Earlier notes", style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 8.dp))
-            older.forEach { TranscriptCard(it, null, canAppend, onAppend) }
+            older.forEach { c -> key(c.id) { NoteCard(c, null, refresh, canAppend, onAppend) } }
         }
-    }
-}
-
-@Composable
-private fun TranscriptCard(entry: HistoryEntry, title: String?, canAppend: Boolean, onAppend: (HistoryEntry) -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            title?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
-            SelectionContainer { Text(entry.transcript, Modifier.padding(end = 8.dp)) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "%s · %.0f s audio · load %.1f s · transcription %.1f s · %.2f× · %d part(s)".format(
-                        java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
-                            .format(java.util.Date(entry.atMs)),
-                        entry.audioSeconds, entry.modelLoadMs / 1000.0, entry.transcribeMs / 1000.0,
-                        entry.realTimeFactor, entry.chunks),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                if (entry.notePath != null) IconButton(onClick = {
-                    if (!openInObsidian(ctx, entry.notePath)) android.widget.Toast.makeText(ctx,
-                        "Could not open Obsidian. Is it installed?", android.widget.Toast.LENGTH_SHORT).show()
-                }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Edit, contentDescription = "Open note in Obsidian")
-                }
-                if (entry.notePath != null) IconButton(onClick = { onAppend(entry) }, enabled = canAppend,
-                    modifier = Modifier.size(48.dp)) {
-                    Icon(painterResource(R.drawable.ic_mic_add), contentDescription = "Record more for this note")
-                }
-                IconButton(onClick = {
-                    // Only the transcript text, none of the timing details.
-                    ctx.getSystemService(android.content.ClipboardManager::class.java)
-                        .setPrimaryClip(android.content.ClipData.newPlainText("Transcript", entry.transcript))
-                    copied = true
-                    scope.launch { kotlinx.coroutines.delay(1500); copied = false }
-                }, modifier = Modifier.size(48.dp)) {
-                    if (copied) Icon(Icons.Default.Check, contentDescription = "Copied",
-                        tint = MaterialTheme.colorScheme.primary)
-                    else Icon(painterResource(R.drawable.ic_copy), contentDescription = "Copy transcript")
-                }
-            }
+        if (total > limit) OutlinedButton(onClick = { limit += 5 }, modifier = Modifier.fillMaxWidth()) {
+            Text("Load more (${total - limit} older)")
         }
     }
 }
@@ -317,7 +286,7 @@ private fun SetupRow(label: String, value: String, action: @Composable () -> Uni
  * absolute-path form. If the chosen folder is the vault (it contains `.obsidian`), its folder
  * name is the vault name. Otherwise fall back to the absolute path.
  */
-private fun openInObsidian(ctx: android.content.Context, notePath: String): Boolean {
+internal fun openInObsidian(ctx: android.content.Context, notePath: String): Boolean {
     val tree = Prefs(ctx).vaultUri ?: return false
     val docId = android.provider.DocumentsContract.getTreeDocumentId(tree) // e.g. "primary:Documents/Vault"
     val relRoot = docId.substringAfter(':', "")

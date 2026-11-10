@@ -63,13 +63,62 @@ class VaultWriter(context: Context, private val tree: Uri) {
      * Nothing already in the note is rewritten. Returns false if the note no longer exists.
      */
     fun append(path: String, text: String): Boolean {
-        val dirId = findPath(path.substringBeforeLast('/', "")) ?: return false
-        val name = path.substringAfterLast('/')
-        val docId = children(dirId).firstOrNull { it.second == name && !it.third }?.first ?: return false
-        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+        val uri = locate(path) ?: return false
         cr.openOutputStream(uri, "wa")?.use { it.write(text.toByteArray()); it.flush() }
-            ?: throw VaultUnavailableException("Cannot write to $name")
+            ?: throw VaultUnavailableException("Cannot write to $path")
         return true
+    }
+
+    /** Full text of the note at [path], or null if it does not exist. */
+    fun read(path: String): String? {
+        val uri = locate(path) ?: return null
+        return cr.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+    }
+
+    /**
+     * Replaces the whole content of the existing note at [path] and reads it back to verify.
+     * Callers keep a backup first (see PendingEdit), because SAF has no atomic replace.
+     */
+    fun overwrite(path: String, text: String) {
+        val uri = locate(path) ?: throw VaultUnavailableException("Note not found: $path")
+        cr.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()); it.flush() }
+            ?: throw VaultUnavailableException("Cannot write to $path")
+        check(read(path) == text) { "Saving the note could not be verified" }
+    }
+
+    /**
+     * Searches the vault for the note whose frontmatter has `capture_id: [id]` (after it was moved
+     * or renamed in Obsidian). Reads only the start of each file. Returns its vault path.
+     */
+    fun findNoteById(id: String, maxFiles: Int = 5000, startFolder: String = ""): String? {
+        var scanned = 0
+        val start = findPath(startFolder) ?: return null
+        val queue = ArrayDeque(listOf(start to startFolder.trim('/')))
+        val needle = "capture_id: $id"
+        while (queue.isNotEmpty()) {
+            val (dirId, dirPath) = queue.removeFirst()
+            for ((docId, name, isDir) in children(dirId)) {
+                if (name.startsWith(".")) continue
+                val path = if (dirPath.isEmpty()) name else "$dirPath/$name"
+                if (isDir) { queue += docId to path; continue }
+                if (!name.endsWith(".md")) continue
+                if (++scanned > maxFiles) return null
+                val head = runCatching {
+                    cr.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, docId))?.use { input ->
+                        val buf = ByteArray(2048); val n = input.read(buf); if (n > 0) String(buf, 0, n) else ""
+                    }
+                }.getOrNull() ?: continue
+                if (needle in head) return path
+            }
+        }
+        return null
+    }
+
+    private fun locate(path: String): Uri? {
+        val dirId = findPath(path.substringBeforeLast('/', "")) ?: return null
+        val name = path.substringAfterLast('/')
+        val docId = children(dirId).firstOrNull { it.second == name && !it.third }?.first ?: return null
+        return DocumentsContract.buildDocumentUriUsingTree(tree, docId)
     }
 
     /** Removes temp files left behind by an interrupted write. */

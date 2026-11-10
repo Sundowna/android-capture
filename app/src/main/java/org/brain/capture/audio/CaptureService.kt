@@ -29,6 +29,10 @@ import kotlinx.coroutines.launch
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.R
+import org.brain.capture.data.Capture
+import org.brain.capture.data.CaptureDb
+import org.brain.capture.data.CaptureStates
+import java.util.UUID
 import org.brain.capture.pipeline.VoicePipeline
 import org.brain.capture.ui.MainActivity
 import java.io.File
@@ -62,7 +66,7 @@ class CaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO))
+            ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO), intent.getStringExtra(EXTRA_APPEND_LABEL))
             ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else if (!CaptureState.isBusy) stopSelf()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
             ACTION_PROCESS_PENDING -> processPending()
@@ -71,14 +75,15 @@ class CaptureService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun startRecording(appendTo: String? = null) {
+    /** [appendTo] is the capture id of the note to add to; [appendLabel] its path, for display. */
+    private fun startRecording(appendTo: String? = null, appendLabel: String? = null) {
         if (CaptureState.isBusy) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             CaptureState.set(Phase.Failed("Microphone permission missing", null))
             stopSelf(); return
         }
         val started = System.currentTimeMillis()
-        CaptureState.set(Phase.Recording(started, appendTo))
+        CaptureState.set(Phase.Recording(started, appendLabel))
         startForeground(NOTIF_ID, buildNotification(CaptureState.phase.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         vibrate()
@@ -86,9 +91,13 @@ class CaptureService : Service() {
 
         val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
         CaptureState.current(file.path)
-        // Stored next to the recording so an interrupted append still goes to the right note.
-        appendTarget(file).let { if (appendTo != null) it.writeText(appendTo) else it.delete() }
         recordJob = scope.launch(Dispatchers.IO) {
+            // The row exists from the first second, so an interrupted recording (and its append
+            // target) is never forgotten.
+            CaptureDb.get(applicationContext).dao().upsert(Capture(
+                id = UUID.randomUUID().toString(), createdAt = started, state = CaptureStates.RECORDING,
+                stagingPath = file.path, appendTo = appendTo,
+            ))
             val ok = runCatching { record(file) }
                 .onFailure { Log.e(TAG, "Recording failed", it) }
                 .isSuccess
@@ -247,8 +256,7 @@ class CaptureService : Service() {
         const val ACTION_PROCESS_PENDING = "process_pending"
         const val EXTRA_RETRY = "retry"
         const val EXTRA_APPEND_TO = "append_to"
-
-        fun appendTarget(wav: File) = File(wav.parentFile, wav.nameWithoutExtension + ".append")
+        const val EXTRA_APPEND_LABEL = "append_label"
         private val STAMP = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.ROOT)
 
         fun stagingDir(ctx: Context): File = File(ctx.filesDir, "staging").apply { mkdirs() }
