@@ -28,7 +28,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -59,7 +62,9 @@ import kotlinx.coroutines.withContext
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
+import org.brain.capture.HistoryEntry
 import org.brain.capture.R
+import org.brain.capture.TranscriptHistory
 import org.brain.capture.audio.CaptureService
 import org.brain.capture.transcribe.ModelStore
 
@@ -90,7 +95,8 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
     val scope = rememberCoroutineScope()
     val phase by CaptureState.phase.collectAsState()
     val level by CaptureState.level.collectAsState()
-    val last by CaptureState.last.collectAsState()
+    val history by TranscriptHistory.entries.collectAsState()
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { TranscriptHistory.load(ctx) } }
 
     var vault by remember { mutableStateOf(prefs.vaultUri) }
     var modelReady by remember { mutableStateOf(models.isInstalled()) }
@@ -181,20 +187,7 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
             }
         }
 
-        last?.let { r ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Last transcript", style = MaterialTheme.typography.titleSmall)
-                    SelectionContainer { Text(r.transcript.ifBlank { "(no speech recognised)" }) }
-                    Text(
-                        "Audio %.1f s · model load %.1f s · transcription %.1f s · %.2f× real time · %d part(s)"
-                            .format(r.audioSeconds, r.modelLoadMs / 1000.0, r.transcribeMs / 1000.0, r.realTimeFactor, r.chunks),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
+        history.firstOrNull()?.let { TranscriptCard(it, title = "Last transcript") }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -242,6 +235,50 @@ private fun CaptureScreen(retryRequest: MutableState<Boolean>) {
                             shape = SegmentedButtonDefaults.itemShape(i, options.size),
                         ) { Text(label) }
                     }
+                }
+            }
+        }
+
+        val older = history.drop(1)
+        if (older.isNotEmpty()) {
+            Text("Earlier transcripts", style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 8.dp))
+            older.forEach { TranscriptCard(it) }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptCard(entry: HistoryEntry, title: String? = null) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            title?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
+            SelectionContainer { Text(entry.transcript, Modifier.padding(end = 8.dp)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "%s · %.0f s audio · load %.1f s · transcription %.1f s · %.2f× · %d part(s)".format(
+                        java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                            .format(java.util.Date(entry.atMs)),
+                        entry.audioSeconds, entry.modelLoadMs / 1000.0, entry.transcribeMs / 1000.0,
+                        entry.realTimeFactor, entry.chunks),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = {
+                    // Only the transcript text, none of the timing details.
+                    ctx.getSystemService(android.content.ClipboardManager::class.java)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("Transcript", entry.transcript))
+                    copied = true
+                    scope.launch { kotlinx.coroutines.delay(1500); copied = false }
+                }, modifier = Modifier.size(48.dp)) {
+                    if (copied) Icon(Icons.Default.Check, contentDescription = "Copied",
+                        tint = MaterialTheme.colorScheme.primary)
+                    else Icon(painterResource(R.drawable.ic_copy), contentDescription = "Copy transcript")
                 }
             }
         }

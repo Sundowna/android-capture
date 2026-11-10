@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import org.brain.capture.CaptureState
+import org.brain.capture.HistoryEntry
+import org.brain.capture.TranscriptHistory
 import org.brain.capture.LastResult
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
@@ -45,6 +47,17 @@ class VoicePipeline(private val context: Context) {
             val path = writeToVault(wav, seconds, transcript, warning)
             wav.delete()
             CaptureState.set(Phase.Saved(path, warning))
+            CaptureState.last.value?.let { r ->
+                TranscriptHistory.add(context, HistoryEntry(
+                    atMs = capturedAt(wav).toInstant().toEpochMilli(),
+                    transcript = transcript,
+                    audioSeconds = seconds,
+                    modelLoadMs = r.modelLoadMs,
+                    transcribeMs = r.transcribeMs,
+                    chunks = r.chunks,
+                    notePath = path,
+                ))
+            }
         } catch (e: VaultUnavailableException) {
             Log.w(TAG, "Vault unavailable", e)
             CaptureState.set(Phase.Failed("${e.message}. Recording kept.", wav.path))
