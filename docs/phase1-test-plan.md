@@ -48,4 +48,7 @@ The `Benchmark:` line gives exact timings.
   - Minute-only file names → now `yyyy-MM-dd HH.mm.ss` (colons are not allowed in Obsidian file names).
   - "Recordings waiting" with Retry was confusing → recordings left over from an interruption now resume automatically when the app opens; the file being processed is never listed as waiting; Retry only appears after a real failure.
   - Whisper invented "[BLANK_AUDIO]", "[ Silence ]", "(heartbeat)" for silence, and these became note titles → such tags are stripped; a recording that is ≥90 % digital silence (microphone toggled off) is not transcribed and the note gets a warning callout.
-- Test 9 (vault access revoked) not run yet.
+- Run 3 (same day, after the fixes):
+  - Resumed 4.6-minute recording (cut off by an app update) crashed the decoder: a near-silent piece made Whisper loop until it passed the 448 decoder positions. Fixed by capping tokens (prefix included), a repetition stop and skipping pieces below about -48 dBFS. Afterwards: 275.7 s in 19.7 s, 11 pieces, no error.
+  - Test 9: renaming the vault folder makes Android **drop the app's folder access**; renaming it back does not restore it. Both recordings were kept, the error message now says to choose the folder again, and after re-selecting it and tapping Retry both recordings were saved in order. Staging empty afterwards.
+- Phase 1 checks complete. Not yet tested: the new quick-record panel (needs user feedback), ZIP model import.
