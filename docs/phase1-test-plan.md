@@ -34,3 +34,11 @@ APK: `app/build/outputs/apk/debug/app-debug.apk` (debug build, arm64 only). Buil
 adb logcat -s VoicePipeline CaptureService
 ```
 The `Benchmark:` line gives exact timings.
+
+## Results
+
+### 2026-11-10, run 1 (Pixel 7 Pro, Android 17 / SDK 37)
+- Model: Whisper+'s files copied with adb (same sizes); ZIP import not tested yet.
+- Test 1 (spoken English, language "auto"): 31.4 s audio, model load 0.83 s, transcription 7.8 s for 2 parts, **0.25× real time**. Transcript accurate, punctuation correct, no visible damage at the join between the parts.
+- Test 6: WAV (1 004 844 bytes, valid header) in `Inbox/Attachments`, note in `Inbox/Voice`. The temp-file rename worked through SAF; no `.capture-*.tmp` left behind. Staging emptied.
+- Still open: Whisper+ timing for comparison, tests 3–5 and 7–10.
