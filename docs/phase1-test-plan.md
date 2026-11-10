@@ -41,4 +41,5 @@ The `Benchmark:` line gives exact timings.
 - Model: Whisper+'s files copied with adb (same sizes); ZIP import not tested yet.
 - Test 1 (spoken English, language "auto"): 31.4 s audio, model load 0.83 s, transcription 7.8 s for 2 parts, **0.25× real time**. Transcript accurate, punctuation correct, no visible damage at the join between the parts.
 - Test 6: WAV (1 004 844 bytes, valid header) in `Inbox/Attachments`, note in `Inbox/Voice`. The temp-file rename worked through SAF; no `.capture-*.tmp` left behind. Staging emptied.
-- Still open: Whisper+ timing for comparison, tests 3–5 and 7–10.
+- Test 2: Whisper+ took roughly the same time on the same text (user stopwatch). **Go/no-go passed: Option B matches Whisper+ in quality and speed.**
+- Still open: tests 3–5 and 7–10.
