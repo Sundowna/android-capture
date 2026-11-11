@@ -120,6 +120,8 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
     var expanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val border by animateColorAsState(if (justSaved) b.success.copy(alpha = 0.5f) else Color.Transparent, label = "b")
 
     Surface(shape = CardShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp,
@@ -159,6 +161,9 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
 
             // Actions: quiet icons, always in the same order.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                // Delete sits apart on the left, away from the everyday actions.
+                CardAction(painterResource(R.drawable.ic_delete), "Delete note") { deleting = true }
+                Box(Modifier.weight(1f))
                 CardAction(painterResource(R.drawable.ic_pencil), "Open in Obsidian") {
                     val path = c.notePath
                     if (path == null || !openInObsidian(ctx, path))
@@ -174,6 +179,24 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
 
     if (editing) EditDialog(c, onDone = { editing = false; reload++ })
     if (typing) TypeDialog(c, onDone = { typing = false; reload++ })
+    if (deleting) {
+        val attached = if (c.kind == "voice") "its recordings" else if (c.kind == "file") "its files" else null
+        AlertDialog(
+            onDismissRequest = { deleting = false },
+            title = { Text("Delete this note?") },
+            text = { Text("The note${attached?.let { " and $it" } ?: ""} ${if (attached == null) "moves" else "move"} to the .trash folder in your vault, " +
+                "where you can still restore them. Your sync tool will remove it on your other devices too.") },
+            confirmButton = { TextButton(onClick = {
+                deleting = false
+                scope.launch {
+                    runCatching { Notes.delete(ctx, c) }.onFailure {
+                        Toast.makeText(ctx, "Could not delete: ${it.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable

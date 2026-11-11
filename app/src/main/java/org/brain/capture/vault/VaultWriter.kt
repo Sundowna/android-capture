@@ -104,7 +104,8 @@ class VaultWriter(context: Context, private val tree: Uri) {
                 if (name.startsWith(".")) continue
                 val path = if (dirPath.isEmpty()) name else "$dirPath/$name"
                 if (isDir) { queue += docId to path; continue }
-                if (!name.endsWith(".md")) continue
+                // Conflict copies carry the same capture_id; the card must follow the real note.
+                if (!name.endsWith(".md") || ".sync-conflict-" in name) continue
                 if (++scanned > maxFiles) return null
                 val head = runCatching {
                     cr.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, docId))?.use { input ->
@@ -122,6 +123,32 @@ class VaultWriter(context: Context, private val tree: Uri) {
         val name = path.substringAfterLast('/')
         val docId = children(dirId).firstOrNull { it.second == name && !it.third }?.first ?: return null
         return DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+    }
+
+    /**
+     * Moves the file at [path] into the `.trash` folder at the top of the chosen folder (Obsidian's
+     * own trash when that folder is the vault root), so it can still be restored. Returns false if
+     * the file does not exist.
+     */
+    fun trash(path: String): Boolean {
+        val src = locate(path) ?: return false
+        val parentId = findPath(path.substringBeforeLast('/', "")) ?: return false
+        val trashId = ensureDir(".trash")
+        val name = path.substringAfterLast('/')
+        val free = uniqueName(trashId, name.substringBeforeLast('.'), name.substringAfterLast('.'))
+        var doc = src
+        if (free != name) doc = DocumentsContract.renameDocument(cr, doc, free) ?: throw VaultUnavailableException("Cannot rename $name")
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, parentId)
+        val target = DocumentsContract.buildDocumentUriUsingTree(tree, trashId)
+        val moved = runCatching { DocumentsContract.moveDocument(cr, doc, parent, target) }.getOrNull()
+        if (moved == null) {
+            // Provider without move support: copy into the trash, then remove the original.
+            val copy = DocumentsContract.createDocument(cr, target, cr.getType(doc) ?: "application/octet-stream", free)
+                ?: throw VaultUnavailableException("Cannot move $name to the trash")
+            cr.openInputStream(doc)!!.use { i -> cr.openOutputStream(copy)!!.use { o -> i.copyTo(o) } }
+            DocumentsContract.deleteDocument(cr, doc)
+        }
+        return true
     }
 
     /** Removes temp files left behind by an interrupted write. */

@@ -31,6 +31,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
@@ -103,7 +104,7 @@ fun CaptureTheme(content: @Composable () -> Unit) {
  * live level meter.
  */
 @Composable
-fun RecordHero(recording: RecordingInfo?, level: Float, enabled: Boolean, idleHint: String, onClick: () -> Unit) {
+fun RecordHero(recording: RecordingInfo?, level: Float, enabled: Boolean, idleHint: String, onDiscard: () -> Unit = {}, onClick: () -> Unit) {
     val b = brand()
     val isRec = recording != null
     val color by animateColorAsState(if (isRec) b.record else MaterialTheme.colorScheme.primary, tween(250), label = "c")
@@ -147,6 +148,7 @@ fun RecordHero(recording: RecordingInfo?, level: Float, enabled: Boolean, idleHi
             }
             Text("Tap to stop · keeps recording when the screen is off", style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            DiscardButton(recording.startedAtMs, onDiscard)
         } else {
             Text(idleHint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -185,3 +187,23 @@ fun phaseLabel(p: Phase): String? = when (p) {
 }
 
 val Phase.isBusy: Boolean get() = this is Phase.LoadingModel || this is Phase.Transcribing || this is Phase.WritingVault
+
+/**
+ * Throws the running recording away. Short recordings go at once; from 20 s on it asks first,
+ * so a mis-tap can't wipe a long thought.
+ */
+@Composable
+fun DiscardButton(startedAtMs: Long, onDiscard: () -> Unit, modifier: Modifier = Modifier) {
+    var asking by remember { mutableStateOf(false) }
+    androidx.compose.material3.TextButton(modifier = modifier, onClick = {
+        if (System.currentTimeMillis() - startedAtMs < 20_000) onDiscard() else asking = true
+    }) { Text("Discard", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold) }
+    if (asking) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { asking = false },
+        title = { Text("Discard this recording?") },
+        text = { Text("It will not be transcribed or saved, and can't be recovered.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { asking = false; onDiscard() }) {
+            Text("Discard", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { asking = false }) { Text("Keep recording") } },
+    )
+}

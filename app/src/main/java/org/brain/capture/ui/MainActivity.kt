@@ -185,6 +185,7 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
             item("hero") {
                 RecordHero(recording, level, enabled = true,
                     idleHint = if (pending.isNotEmpty()) "Tap to capture another thought" else "Tap to capture a thought",
+                    onDiscard = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL) },
                     onClick = { toggleRecording() })
             }
             // A general problem that is not tied to a recording (e.g. microphone or storage).

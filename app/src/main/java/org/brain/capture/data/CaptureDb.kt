@@ -19,6 +19,7 @@ object CaptureStates {
     const val TRANSCRIBED = "transcribed"
     const val SAVED = "saved"
     const val FAILED = "failed"
+    const val DISCARDED = "discarded"
 }
 
 /**
@@ -86,6 +87,8 @@ interface CaptureDao {
     @Query("SELECT * FROM captures WHERE kind = 'voice' AND state IN ('recording','recorded','transcribed','failed') ORDER BY createdAt DESC")
     fun inProgress(): Flow<List<Capture>>
     @Query("DELETE FROM captures WHERE state = 'discarded'") suspend fun deleteDiscarded()
+    @Query("DELETE FROM captures WHERE id = :id OR appendTo = :id") suspend fun deleteWithAdditions(id: String)
+    @Query("SELECT * FROM captures WHERE appendTo = :id") suspend fun additions(id: String): List<Capture>
 
     /** A saved share of the same URL or file since [since], if any. */
     @Query("SELECT * FROM captures WHERE fingerprint = :fp AND state = 'saved' AND createdAt >= :since ORDER BY createdAt DESC LIMIT 1")

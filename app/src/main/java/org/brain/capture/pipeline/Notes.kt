@@ -166,6 +166,37 @@ object Notes {
         ShareBundle(text, files)
     }
 
+    /**
+     * Deletes a card: its note, its recordings (including added ones) and shared files go to the
+     * vault's `.trash` folder, and the app forgets the capture. Embeds the user added in Obsidian
+     * are left alone, since other notes may use them.
+     */
+    suspend fun delete(ctx: Context, c: Capture) = withContext(Dispatchers.IO) {
+        val vault = vault(ctx)
+        val dao = CaptureDb.get(ctx).dao()
+        val path = locate(ctx, vault, c)
+        val own = buildList {
+            c.audioVaultName?.let(::add)
+            dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add) }
+            runCatching {
+                val f = org.json.JSONObject(c.details ?: "{}").optJSONArray("files")
+                if (f != null) for (i in 0 until f.length()) f.getJSONObject(i).optString("name").takeIf { it.isNotEmpty() }?.let(::add)
+            }
+        }.distinct()
+        val folder = path?.substringBeforeLast('/', "") ?: c.notePath?.substringBeforeLast('/', "") ?: ""
+        val inbox = Prefs(ctx).inboxFolder
+        for (name in own) {
+            val moved = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name")
+                .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
+            if (!moved) Log.w(TAG, "Attachment not found for delete: $name")
+        }
+        if (path != null) vault.trash(path)
+        dao.clearEdit(c.id)
+        dao.deleteWithAdditions(c.id)
+        cache.remove(c.id)
+        Log.i(TAG, "Deleted capture ${c.id} (${own.size} file(s)) to .trash")
+    }
+
     private fun vault(ctx: Context): VaultWriter =
         VaultWriter(ctx, Prefs(ctx).vaultUri ?: throw VaultUnavailableException("No vault folder selected"))
 }

@@ -133,6 +133,10 @@ class QuickRecordActivity : ComponentActivity() {
                                     modifier = Modifier.fillMaxWidth().height(64.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = brand().record, contentColor = Color.White),
                                 ) { Text("Stop", style = MaterialTheme.typography.titleMedium) }
+                                DiscardButton(r.startedAtMs, {
+                                    CaptureService.send(this@QuickRecordActivity, CaptureService.ACTION_CANCEL)
+                                    finish()
+                                }, Modifier.align(Alignment.CenterHorizontally))
                             }
                             !hadRecording && p !is Phase.Failed -> {
                                 Text("Starting microphone…", style = MaterialTheme.typography.titleMedium)

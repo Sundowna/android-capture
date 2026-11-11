@@ -52,6 +52,7 @@ class CaptureService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var stopRequested = false
+    @Volatile private var cancelRequested = false
     private val procLock = Any()
     private var processingActive = false
 
@@ -72,6 +73,7 @@ class CaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO), intent.getStringExtra(EXTRA_APPEND_LABEL))
             ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else maybeFinish()
+            ACTION_CANCEL -> if (CaptureState.isRecording) { cancelRequested = true; stopRequested = true } else maybeFinish()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
             ACTION_PROCESS_PENDING -> {
                 if (CaptureState.phase.value is Phase.Failed) CaptureState.set(Phase.Idle)
@@ -107,6 +109,7 @@ class CaptureService : Service() {
         goForeground()
         vibrate()
         stopRequested = false
+        cancelRequested = false
 
         scope.launch(Dispatchers.IO) {
             // The row exists from the first second, so an interrupted recording (and its append
@@ -122,6 +125,16 @@ class CaptureService : Service() {
                 }
             }.onFailure { Log.e(TAG, "Recording failed", it) }.isSuccess
             CaptureState.level(0f)
+            if (cancelRequested) {
+                // Discarded: remove the audio before the queue could pick it up, and forget the row.
+                file.delete()
+                dao.byStaging(file.path)?.let { dao.upsert(it.copy(state = CaptureStates.DISCARDED)) }
+                dao.deleteDiscarded()
+                CaptureState.recording(null)
+                vibrate()
+                Log.i(TAG, "Recording discarded")
+                maybeFinish(); return@launch
+            }
             CaptureState.recording(null)
             vibrate()
             if (!ok && file.length() <= 44) {
@@ -250,6 +263,7 @@ class CaptureService : Service() {
                     ?: if (CaptureState.isProcessing) "Earlier recording is being transcribed" else null)
                 .setUsesChronometer(true).setWhen(r.startedAtMs).setShowWhen(true).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
+                .addAction(Notification.Action.Builder(null, "Discard", serviceIntent(ACTION_CANCEL)).build())
                 .build()
         }
         when (p) {
@@ -306,6 +320,7 @@ class CaptureService : Service() {
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_TOGGLE = "toggle"
+        const val ACTION_CANCEL = "cancel"
         const val ACTION_PROCESS_PENDING = "process_pending"
         const val EXTRA_RETRY = "retry"
         const val EXTRA_APPEND_TO = "append_to"
@@ -328,7 +343,7 @@ class CaptureService : Service() {
         fun send(ctx: Context, action: String, extra: Intent.() -> Unit = {}) {
             val i = Intent(ctx, CaptureService::class.java).setAction(action).apply(extra)
             // Stop only ever goes to a service that is already in the foreground.
-            if (action == ACTION_STOP) ctx.startService(i) else ctx.startForegroundService(i)
+            if (action == ACTION_STOP || action == ACTION_CANCEL) ctx.startService(i) else ctx.startForegroundService(i)
         }
     }
 }
