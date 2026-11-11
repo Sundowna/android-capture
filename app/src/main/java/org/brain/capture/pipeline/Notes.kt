@@ -131,6 +131,41 @@ object Notes {
         file.renameTo(File(ctx.filesDir, "history.jsonl.imported"))
     }
 
+    /** What sharing a card sends: the note text and copies of the files it embeds. */
+    class ShareBundle(val text: String, val files: List<Pair<File, String>>) // file, mime type
+
+    /**
+     * Collects a note for sharing to another app: the readable text (no frontmatter, no embed
+     * lines) and the audio, photos and documents it embeds, copied to the app's cache so the
+     * other app gets read access to just these files. The previous share's copies are removed.
+     */
+    suspend fun shareBundle(ctx: Context, c: Capture): ShareBundle = withContext(Dispatchers.IO) {
+        val out = File(ctx.cacheDir, "outgoing").apply { deleteRecursively(); mkdirs() }
+        val vault = runCatching { vault(ctx) }.getOrNull()
+        val path = vault?.let { runCatching { locate(ctx, it, c) }.getOrNull() }
+        val note = path?.let { vault.read(it) }
+        var text = note?.let(NoteText::display) ?: c.transcript.orEmpty()
+        if (c.kind == "file") text = text.lines().drop(1).joinToString("\n").trim() // drop "Shared from …"
+        val files = mutableListOf<Pair<File, String>>()
+        if (vault != null && note != null) {
+            val folder = path.substringBeforeLast('/', "")
+            val inbox = Prefs(ctx).inboxFolder
+            val names = Regex("""!\[\[([^\]|#]+)""").findAll(note).map { it.groupValues[1].trim() }.distinct()
+            for (name in names) {
+                val candidates = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name", name)
+                    .map { it.trimStart('/') }.distinct()
+                val uri = candidates.firstNotNullOfOrNull { runCatching { vault.uriOf(it) }.getOrNull() } ?: continue
+                runCatching {
+                    val dest = File(out, File(name).name)
+                    ctx.contentResolver.openInputStream(uri)?.use { input -> dest.outputStream().use { input.copyTo(it) } }
+                    val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
+                    files += dest to mime
+                }.onFailure { Log.w(TAG, "Could not attach $name", it) }
+            }
+        }
+        ShareBundle(text, files)
+    }
+
     private fun vault(ctx: Context): VaultWriter =
         VaultWriter(ctx, Prefs(ctx).vaultUri ?: throw VaultUnavailableException("No vault folder selected"))
 }

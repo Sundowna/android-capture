@@ -166,6 +166,7 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 }
                 CardAction(painterResource(R.drawable.ic_text_add), "Add typed text") { typing = true }
                 CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
+                ShareAction(c)
                 CopyAction(text.ifBlank { null })
             }
         }
@@ -208,6 +209,49 @@ private fun LinkBody(text: String) {
 private fun CardAction(icon: Painter, label: String, enabled: Boolean = true, onClick: () -> Unit) {
     IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(44.dp)) {
         Icon(icon, label, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.4f))
+    }
+}
+
+/** Shares the note text plus its audio, photos and documents to another app. */
+@Composable
+private fun ShareAction(c: Capture) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    IconButton(enabled = !busy, onClick = {
+        busy = true
+        scope.launch {
+            val bundle = Notes.shareBundle(ctx, c)
+            busy = false
+            val uris = bundle.files.map { (f, _) ->
+                androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+            }
+            val mimes = bundle.files.map { it.second }.distinct()
+            val intent = when (uris.size) {
+                0 -> android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                1 -> android.content.Intent(android.content.Intent.ACTION_SEND).setType(mimes[0])
+                    .putExtra(android.content.Intent.EXTRA_STREAM, uris[0])
+                else -> android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE)
+                    .setType(if (mimes.size == 1) mimes[0] else mimes.map { it.substringBefore('/') }.distinct()
+                        .singleOrNull()?.let { "$it/*" } ?: "*/*")
+                    .putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
+            }
+            if (bundle.text.isNotBlank()) intent.putExtra(android.content.Intent.EXTRA_TEXT, bundle.text)
+            if (uris.isNotEmpty()) {
+                intent.clipData = ClipData.newRawUri("", uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+                intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            if (bundle.text.isBlank() && uris.isEmpty()) {
+                Toast.makeText(ctx, "Nothing to share in this note.", Toast.LENGTH_SHORT).show(); return@launch
+            }
+            val chooser = android.content.Intent.createChooser(intent, null).putExtra(
+                android.content.Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(android.content.ComponentName(ctx, org.brain.capture.share.ShareActivity::class.java)))
+            ctx.startActivity(chooser)
+        }
+    }, modifier = Modifier.size(44.dp)) {
+        Icon(painterResource(R.drawable.ic_share), "Share", Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (busy) 0.4f else 1f))
     }
 }
 

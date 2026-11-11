@@ -69,6 +69,9 @@ class VaultWriter(context: Context, private val tree: Uri) {
         return true
     }
 
+    /** Content URI of the file at [path] (relative to the vault), or null if it does not exist. */
+    fun uriOf(path: String): Uri? = locate(path)
+
     /** Full text of the note at [path], or null if it does not exist. */
     fun read(path: String): String? {
         val uri = locate(path) ?: return null
