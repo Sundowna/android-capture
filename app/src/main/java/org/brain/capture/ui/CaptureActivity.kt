@@ -13,7 +13,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.EaseInOutSine
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -258,8 +260,9 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 }
             } else if (mode == CaptureActivity.MODE_VOICE) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
+                    // Left to right in the order they happen: the exact words first, then the clean version.
                     ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
+                    ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
                     Spacer(Modifier.weight(1f))
                     if (!private && (note == null || recordingHere && recording?.appendTo == null))
                         KindChip(kind) { kind = if (kind == CaptureTypes.TASK) CaptureTypes.IDEA else CaptureTypes.TASK }
@@ -335,10 +338,11 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
 @Composable
 private fun TopBar(private: Boolean, locked: Boolean, onPrivate: (Boolean) -> Unit, onClose: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-        Surface(onClick = onClose, shape = RoundedCornerShape(12.dp), color = Ink.Panel,
+        // Just the chevron (no tile behind it); the touch area stays 44 dp.
+        Surface(onClick = onClose, shape = CircleShape, color = Color.Transparent,
             modifier = Modifier.size(44.dp).semantics { contentDescription = "Back" }) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(painterResource(R.drawable.ic_back), null, Modifier.size(20.dp), tint = Ink.TextSoft)
+            Box(contentAlignment = Alignment.CenterStart) {
+                Icon(painterResource(R.drawable.ic_back), null, Modifier.size(24.dp), tint = Ink.TextSoft)
             }
         }
         Row(Modifier.clip(RoundedCornerShape(10.dp)).background(Ink.Well).padding(3.dp)
@@ -381,6 +385,9 @@ private fun KindChip(kind: String, onToggle: () -> Unit) {
         Text(if (kind == CaptureTypes.TASK) "Task ⇄" else "Idea ⇄", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextDim)
     }
 }
+
+/** One heartbeat, about 55 a minute. */
+private const val HEARTBEAT_MS = 1100
 
 private val TIME = SimpleDateFormat("HH:mm", Locale.ROOT)
 
@@ -571,23 +578,39 @@ private fun SmallAction(label: String, onClick: () -> Unit) {
  */
 @Composable
 fun BigButton(recording: Boolean, paused: Boolean, level: Float, size: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val t = rememberInfiniteTransition(label = "pulse")
-    // One full breath every 3.2 s, eased in and out, so it never jerks.
-    val breath by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse), label = "breath")
+    val t = rememberInfiniteTransition(label = "heart")
+    // A resting heartbeat (about 55 a minute): a strong "lub", a softer "dub" right after,
+    // then a long, slow ease back to rest before the next beat.
+    val beat by t.animateFloat(0f, 0f, infiniteRepeatable(keyframes {
+        durationMillis = HEARTBEAT_MS
+        0f at 0 using FastOutLinearInEasing
+        1f at 110 using LinearOutSlowInEasing
+        0.28f at 250 using FastOutLinearInEasing
+        0.62f at 360 using LinearOutSlowInEasing
+        0f at HEARTBEAT_MS
+    }), label = "beat")
+    // The same clock, linear: drives the soft ring that travels outward from each beat.
+    val echo by t.animateFloat(0f, 1f, infiniteRepeatable(tween(HEARTBEAT_MS, easing = LinearEasing)), label = "echo")
     val pulsing = recording && !paused
-    val on by animateFloatAsState(if (pulsing) 1f else 0f, tween(600, easing = FastOutSlowInEasing), label = "on")
+    val on by animateFloatAsState(if (pulsing) 1f else 0f, tween(700, easing = FastOutSlowInEasing), label = "on")
     Box(modifier.size(size * 1.6f), contentAlignment = Alignment.Center) {
-        // Outer soft glow and inner halo, breathing together; at rest they settle to a faint ring.
+        // The beat's ripple: leaves the button with the "lub" and fades as it spreads.
         Box(Modifier.size(size).graphicsLayer {
-            val s = 1.19f + on * (0.12f + 0.22f * breath)
-            scaleX = s; scaleY = s; alpha = 0.12f + on * (0.10f - 0.06f * breath)
+            val e = LinearOutSlowInEasing.transform(echo)
+            val s = 1f + 0.55f * e
+            scaleX = s; scaleY = s; alpha = on * 0.26f * (1f - echo) * (1f - echo)
         }.clip(CircleShape).background(Ink.Amber))
+        // Soft glow that swells with each beat; at rest it settles to a faint ring.
         Box(Modifier.size(size).graphicsLayer {
-            val s = 1f + on * (0.06f + 0.10f * breath)
-            scaleX = s; scaleY = s; alpha = on * (0.22f - 0.08f * breath)
+            val s = 1.19f + on * (0.04f + 0.16f * beat)
+            scaleX = s; scaleY = s; alpha = 0.12f + on * 0.14f * beat
         }.clip(CircleShape).background(Ink.Amber))
         Surface(onClick = onClick, shape = CircleShape, color = Ink.Amber, shadowElevation = 4.dp,
-            modifier = Modifier.size(size).semantics {
+            modifier = Modifier.size(size).graphicsLayer {
+                // The button itself gives a small, physical thump on the beat.
+                val s = 1f + on * 0.035f * beat
+                scaleX = s; scaleY = s
+            }.semantics {
                 contentDescription = if (recording) "Stop and save" else "Start talking"
             }) {
             Box(contentAlignment = Alignment.Center) {
