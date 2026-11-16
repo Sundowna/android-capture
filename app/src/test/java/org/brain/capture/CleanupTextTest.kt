@@ -109,6 +109,18 @@ class CleanupTextTest {
         assertEquals("• Buy milk\n☐ Call mum\n\nAdded 09:01\n\nMore.", CleanupText.forDisplay(body))
     }
 
+    @Test fun shareAdditionBlock() {
+        val at = OffsetDateTime.of(2026, 11, 16, 20, 28, 14, 0, ZoneOffset.UTC)
+        val src = NoteBuilder.Source("Files", "com.android.documentsui")
+        val pdf = NoteBuilder.SharedFile("Brain explain pain.pdf", "application/pdf", 1000, "abc", 12)
+        val block = NoteBuilder.shareAddition(at, src, "file", null, null, null, listOf(pdf)).lines()
+        assertEquals(listOf("", "**Added 20:28:14 · shared from Files**", "", "![[Brain explain pain.pdf]]", ""), block)
+        val link = NoteBuilder.shareAddition(at, src, "link", "https://noigroup.com", "NOI [Group]", null, emptyList())
+        assertTrue(link.contains("[NOI (Group)](https://noigroup.com)"))
+        assertEquals(listOf("Added 20:28 · shared from Files", "", "![[x.pdf]]"),
+            CleanupText.forDisplay(listOf("**Added 20:28:14 · shared from Files**", "", "![[x.pdf]]").joinToString("\n")).lines())
+    }
+
     @Test fun leavesEditedNoteAlone() =
         assertNull(CleanupText.rewrite(note.replace("call mum", "call Mum"), "Uh buy milk. And, uh, call mum.", "x", "m"))
 }

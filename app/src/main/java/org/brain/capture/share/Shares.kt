@@ -156,6 +156,26 @@ object Shares {
                     metaFile(d).writeText(meta.toString())
                 }
 
+                // Added to an existing note (picked in the share panel): append, don't make a new note.
+                val target = c.appendTo?.let { dao.get(it) }
+                if (target != null) {
+                    val path = org.brain.capture.pipeline.Notes.locate(ctx, vault, target)
+                        ?: throw VaultUnavailableException("The note to add to was not found")
+                    val source = NoteBuilder.Source(meta.optString("sourceName").ifEmpty { null }, meta.optString("sourceApp").ifEmpty { null })
+                    val heading = NoteBuilder.shareAdditionHeading(at, source)
+                    val already = vault.read(path)?.contains(heading) == true
+                    if (!already && !vault.append(path, addition(c, meta, at, source)))
+                        throw VaultUnavailableException("The note to add to was not found")
+                    val now = System.currentTimeMillis()
+                    c = c.copy(state = CaptureStates.SAVED, appended = true, notePath = null, error = null, details = details(meta),
+                        transcript = noteText(c, meta), lastActivityAt = now)
+                    dao.upsert(c)
+                    dao.touch(target.id, now)
+                    org.brain.capture.pipeline.Notes.forget(target.id)
+                    d.deleteRecursively()
+                    return@withContext path
+                }
+
                 val folder = "$inbox/" + when (c.kind) { "link" -> "Links"; "text" -> "Text"; else -> "Documents" }
                 val path = vault.findNoteById(c.id, maxFiles = 500, startFolder = folder) ?: run {
                     val (base, note) = buildNote(c, meta, at)
@@ -205,6 +225,15 @@ object Shares {
                     text, source)
             }
         }
+    }
+
+    private fun addition(c: Capture, meta: JSONObject, at: OffsetDateTime, source: NoteBuilder.Source): String {
+        val files = meta.getJSONArray("files")
+        val list = (0 until files.length()).map { files.getJSONObject(it) }.map {
+            NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256"), it.optInt("pages", -1))
+        }
+        return NoteBuilder.shareAddition(at, source, c.kind, meta.optString("url").ifEmpty { null },
+            meta.optString("title").ifEmpty { null }, meta.optString("text").ifEmpty { null }, list)
     }
 
     /** What the card shows for a share: where it came from and which files were saved. */

@@ -35,6 +35,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.items
+import org.brain.capture.ui.Ink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -64,8 +67,11 @@ import java.util.Date
 private sealed interface ShareUi {
     data class Saving(val what: String, val progress: Float?) : ShareUi
     data class Duplicate(val staged: Capture, val earlier: Capture) : ShareUi
+    /** Where it goes: a new note (top), or one of the recent notes, like picking a chat to share to. */
+    data class Pick(val staged: Capture, val notes: List<Capture>) : ShareUi
     /** [title]/[subtitle] say what was saved: the page title and site, the file name, the text. */
-    data class Saved(val notePath: String, val captureId: String, val kind: String, val title: String, val subtitle: String) : ShareUi
+    data class Saved(val notePath: String, val captureId: String, val kind: String, val title: String, val subtitle: String,
+                     val addedTo: Boolean = false) : ShareUi
     /** Recording a voice comment that is added to the note just saved. */
     data class Commenting(val saved: Saved, val stopped: Boolean = false) : ShareUi
     data class Failed(val message: String, val kept: Boolean) : ShareUi
@@ -105,6 +111,20 @@ class ShareActivity : ComponentActivity() {
             else if (staged.kind == "text") ui.value = ShareUi.Saving("Saving text…", null)
             val earlier = Shares.duplicateOf(app, staged)
             if (earlier != null) { ui.value = ShareUi.Duplicate(staged, earlier); return@launch }
+            pick(staged)
+        }
+    }
+
+    private suspend fun pick(staged: Capture) {
+        val notes = org.brain.capture.data.CaptureDb.get(applicationContext).dao().notesToAddTo(200)
+        ui.value = if (notes.isEmpty()) ShareUi.Saving("Saving…", null).also { save(staged) } else ShareUi.Pick(staged, notes)
+    }
+
+    /** [target] null = a new note (the default); otherwise the share is added to that note. */
+    private fun choose(staged: Capture, target: Capture?) {
+        ui.value = ShareUi.Saving(if (target == null) "Saving…" else "Adding to the note…", null)
+        AppScope.launch {
+            if (target != null) org.brain.capture.data.CaptureDb.get(applicationContext).dao().setAppendTo(staged.id, target.id)
             save(staged)
         }
     }
@@ -124,6 +144,9 @@ class ShareActivity : ComponentActivity() {
         val lines = c?.transcript.orEmpty().lines().filter { it.isNotBlank() }
         val source = runCatching { org.json.JSONObject(c?.details ?: "{}").optString("source") }.getOrNull()?.ifEmpty { null }
         val folder = notePath.substringBeforeLast('/')
+        if (c?.appendTo != null) return ShareUi.Saved(notePath, c.appendTo, c.kind, noteTitle(notePath),
+            when (c.kind) { "link" -> "Link added"; "text" -> "Text added"; else -> "File added" } + (source?.let { " from $it" } ?: ""),
+            addedTo = true)
         return when (c?.kind) {
             "link" -> {
                 val url = lines.firstOrNull { it.startsWith("http") }
@@ -177,7 +200,7 @@ class ShareActivity : ComponentActivity() {
                 Surface(
                     Modifier.fillMaxWidth().padding(12.dp).navigationBarsPadding()
                         .clickable(remember { MutableInteractionSource() }, indication = null) {},
-                    shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, shadowElevation = 8.dp,
+                    shape = RoundedCornerShape(28.dp), color = Ink.Panel, shadowElevation = 8.dp,
                 ) {
                     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         when (val s = state) {
@@ -186,6 +209,7 @@ class ShareActivity : ComponentActivity() {
                                 if (s.progress == null) LinearProgressIndicator(Modifier.fillMaxWidth())
                                 else LinearProgressIndicator(progress = { s.progress }, modifier = Modifier.fillMaxWidth())
                             }
+                            is ShareUi.Pick -> NotePicker(s.notes, onPick = { choose(s.staged, it) })
                             is ShareUi.Saved -> {
                                 SavedHeader(s)
                                 if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
@@ -235,7 +259,7 @@ class ShareActivity : ComponentActivity() {
                                     }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Open note") }
                                     Button(onClick = {
                                         ui.value = ShareUi.Saving("Saving…", null)
-                                        AppScope.launch { save(s.staged) }
+                                        AppScope.launch { pick(s.staged) }
                                     }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Save again") }
                                 }
                             }
@@ -254,11 +278,76 @@ class ShareActivity : ComponentActivity() {
     override fun onDestroy() {
         // Closing the panel on the duplicate question means "don't save again".
         if (isFinishing) (ui.value as? ShareUi.Duplicate)?.let { d -> AppScope.launch { Shares.discard(applicationContext, d.staged) } }
+        // Closing while picking: never lose the share, save it as a new note.
+        if (isFinishing) (ui.value as? ShareUi.Pick)?.let { p -> val app = applicationContext
+            AppScope.launch { runCatching { Shares.save(app, p.staged.id) } } }
         super.onDestroy()
     }
 }
 
 /** Green confirmation plus a small card with what was saved (title and site, file name, or text). */
+/** "20:28 Voice – Call the dentist" → "Call the dentist"; falls back to the file name. */
+private fun noteTitle(notePath: String): String {
+    val name = notePath.substringAfterLast('/').removeSuffix(".md")
+    return name.substringAfter(" – ", name).ifBlank { name }
+}
+
+/**
+ * Share target picker: "New note" on top (one tap, as before), then recent notes with a search,
+ * like choosing a chat to share to. Private notes are not offered (they never touch the vault).
+ */
+@Composable
+private fun NotePicker(notes: List<Capture>, onPick: (Capture?) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val shown = remember(query, notes) {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) notes else notes.filter {
+            noteTitle(it.notePath.orEmpty()).lowercase().contains(q) || it.transcript.orEmpty().lowercase().contains(q)
+        }
+    }
+    Text("Save to", style = MaterialTheme.typography.titleLarge)
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Ink.Well).padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) Text("Search your notes", style = MaterialTheme.typography.bodyMedium, color = Ink.TextDim)
+            androidx.compose.foundation.text.BasicTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = Ink.TextBody),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink.Amber))
+        }
+    }
+    androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (query.isBlank()) item("new") {
+            PickRow(title = "New note", subtitle = "Saved to your inbox", icon = R.drawable.ic_text_add, accent = true) { onPick(null) }
+        }
+        items(shown, key = { it.id }) { c ->
+            val kind = when { c.type == "task" -> "Task"; c.kind == "voice" -> "Voice"; c.kind == "link" -> "Link"; c.kind == "text" -> "Text"; else -> "File" }
+            PickRow(title = c.clean?.let { org.brain.capture.cleanup.CleanupText.parseStored(it).firstOrNull { l -> l.title }?.text } ?: noteTitle(c.notePath.orEmpty()), subtitle = "$kind · ${org.brain.capture.ui.relativeTime(c.lastActivityAt)}",
+                icon = when (c.kind) { "voice" -> R.drawable.ic_mic; "link" -> R.drawable.ic_link; "text" -> R.drawable.ic_text; else -> R.drawable.ic_doc }) {
+                onPick(c)
+            }
+        }
+        if (shown.isEmpty()) item("none") {
+            Text("No note matches.", style = MaterialTheme.typography.bodySmall, color = Ink.TextDim, modifier = Modifier.padding(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun PickRow(title: String, subtitle: String, icon: Int, accent: Boolean = false, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
+        .heightIn(min = 56.dp).padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(if (accent) Ink.Amber else Ink.Raised), contentAlignment = Alignment.Center) {
+            Icon(painterResource(icon), null, Modifier.size(19.dp), tint = if (accent) Ink.OnAmber else Ink.TextStrong)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (accent) Ink.Amber else Ink.Text)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Ink.TextDim, maxLines = 1)
+        }
+    }
+}
+
 @Composable
 private fun SavedHeader(s: ShareUi.Saved) {
     val b = brand()
@@ -267,7 +356,7 @@ private fun SavedHeader(s: ShareUi.Saved) {
             Icon(painterResource(R.drawable.ic_check), null, Modifier.size(19.dp), tint = b.success)
         }
         Column {
-            Text(when (s.kind) { "link" -> "Link saved"; "text" -> "Text saved"; else -> "Saved" },
+            Text(if (s.addedTo) "Added to note" else when (s.kind) { "link" -> "Link saved"; "text" -> "Text saved"; else -> "Saved" },
                 style = MaterialTheme.typography.titleMedium)
             Text(s.notePath.substringBeforeLast('/'), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)

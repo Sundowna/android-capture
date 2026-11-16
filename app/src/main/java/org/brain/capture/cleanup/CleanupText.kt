@@ -68,7 +68,7 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
     private val BULLET = Regex("""^\s*(?:[-*•]|\d+[.)])\s+(.*)$""")
     private val TASK = Regex("""^\[[ xX]?]\s+(.*)$""")
     private val TITLE = Regex("""^(?:#+\s*)?\**(?:title|titel)\**\s*:\s*\**(.+?)\**$""", RegexOption.IGNORE_CASE)
-    private val ADDED = Regex("""\*\*Added (\d{1,2}:\d{2})(?::\d{2})?( \(typed\))?\*\*""")
+    private val ADDED = Regex("""\*\*Added (\d{1,2}:\d{2})(?::\d{2})?([^*]*)\*\*""")
     private val REFS = Regex("""\s*\[\s*(\d+(?:\s*[,–-]\s*\d+)*)\s*]\s*[.]?\s*$""")
 
     /**
@@ -139,7 +139,7 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
             inQuote = false
             // "**Added 19:43:16**" (an addition's heading) reads as "Added 19:43" on a card.
             val added = ADDED.matchEntire(line.trim())
-            if (added != null) { out += "Added " + added.groupValues[1]; continue }
+            if (added != null) { out += "Added " + added.groupValues[1] + added.groupValues[2]; continue }
             val t = line.trimStart()
             out += when {
                 t.startsWith("- [ ] ") -> "☐ " + t.removePrefix("- [ ] ").replace(REFS, "")

@@ -123,6 +123,12 @@ interface CaptureDao {
     @Query("UPDATE captures SET cleanup = :result WHERE id = :id") suspend fun setCleanup(id: String, result: String)
     @Query("UPDATE captures SET clean = :clean WHERE id = :id") suspend fun setClean(id: String, clean: String)
     @Query("UPDATE captures SET type = :type WHERE id = :id") suspend fun setType(id: String, type: String)
+    /** The note a share is added to; kept on the row so a retry adds it to the same note. */
+    @Query("UPDATE captures SET appendTo = :target WHERE id = :id") suspend fun setAppendTo(id: String, target: String)
+    /** Notes a share can be added to: saved, in the vault (not private), most recently active first. */
+    @Query("""SELECT * FROM captures WHERE state = 'saved' AND appendTo IS NULL AND notePath IS NOT NULL
+              AND type != 'private' ORDER BY lastActivityAt DESC LIMIT :limit""")
+    suspend fun notesToAddTo(limit: Int): List<Capture>
     /** Live view of one capture, for the capture screen. */
     @Query("SELECT * FROM captures WHERE id = :id") fun watch(id: String): Flow<Capture?>
     /** Live list of the recordings and text added to a note, oldest first. */
