@@ -299,7 +299,15 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 Row(Modifier.fillMaxWidth().height(20.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     when {
                         recordingHere && recording?.appendTo != null -> Text("Adding to this note", fontSize = 12.sp, color = Ink.TextDim)
-                        recording != null && !recordingHere -> Text("Recording another note", fontSize = 12.sp, color = Ink.TextDim)
+                        // Looking at another note while recording: say so, and one tap goes back to the one being recorded.
+                        recording != null && !recordingHere -> {
+                            Text(if (recording?.appendTo != null) "Adding to another note · " else "Recording a new note · ",
+                                fontSize = 12.sp, color = Ink.TextDim)
+                            Text("Go to it", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber,
+                                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable {
+                                    recording?.let { r -> noteId = r.appendTo ?: r.captureId; undone = false; userPickedView = false }
+                                }.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
                         adding -> {
                             Text("Talk to add to this note · ", fontSize = 12.sp, color = Ink.TextDim)
                             Text("New note", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber,
