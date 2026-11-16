@@ -55,6 +55,8 @@ data class Capture(
     val appended: Boolean = false,
     val error: String? = null,
     val lastActivityAt: Long = createdAt,
+    /** Voice cleanup outcome: null = not tried yet, else "done", "rejected: …", "skipped: …" or "failed: …". */
+    val cleanup: String? = null,
 )
 
 /** Backup taken before the app rewrites a note, so an interrupted edit can be undone. */
@@ -100,12 +102,18 @@ interface CaptureDao {
     @Query("UPDATE captures SET lastActivityAt = :at WHERE id = :id") suspend fun touch(id: String, at: Long)
     @Query("UPDATE captures SET notePath = :path WHERE id = :id") suspend fun moveNote(id: String, path: String)
 
+    /** Recent own voice notes that have not been through the cleanup step yet. */
+    @Query("""SELECT * FROM captures WHERE kind = 'voice' AND state = 'saved' AND appendTo IS NULL
+              AND notePath IS NOT NULL AND cleanup IS NULL AND createdAt >= :since ORDER BY createdAt""")
+    suspend fun pendingCleanup(since: Long): List<Capture>
+    @Query("UPDATE captures SET cleanup = :result WHERE id = :id") suspend fun setCleanup(id: String, result: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putEdit(e: PendingEdit)
     @Query("DELETE FROM pending_edits WHERE captureId = :id") suspend fun clearEdit(id: String)
     @Query("SELECT * FROM pending_edits") suspend fun pendingEdits(): List<PendingEdit>
 }
 
-@Database(entities = [Capture::class, PendingEdit::class], version = 3, exportSchema = false)
+@Database(entities = [Capture::class, PendingEdit::class], version = 4, exportSchema = false)
 abstract class CaptureDb : RoomDatabase() {
     abstract fun dao(): CaptureDao
 
@@ -123,10 +131,16 @@ abstract class CaptureDb : RoomDatabase() {
             }
         }
 
+        private val V3_TO_V4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE captures ADD COLUMN cleanup TEXT")
+            }
+        }
+
         @Volatile private var instance: CaptureDb? = null
         fun get(ctx: Context): CaptureDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(ctx.applicationContext, CaptureDb::class.java, "captures.db")
-                .addMigrations(V1_TO_V2, V2_TO_V3).build()
+                .addMigrations(V1_TO_V2, V2_TO_V3, V3_TO_V4).build()
                 .also { instance = it }
         }
     }

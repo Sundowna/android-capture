@@ -108,6 +108,8 @@ class CaptureService : Service() {
         holdWakeLock()
         goForeground()
         vibrate()
+        // Load Gemma while the user talks, so cleanup can start as soon as the transcript is ready.
+        org.brain.capture.cleanup.GemmaHolder.warm(applicationContext)
         stopRequested = false
         cancelRequested = false
 
@@ -197,6 +199,8 @@ class CaptureService : Service() {
                     pipeline.run(next)
                     if (CaptureState.phase.value is Phase.Failed) break
                 }
+                // Raw notes are saved and shown; now the clean versions, in the background.
+                org.brain.capture.cleanup.CleanupStep.runPending(applicationContext)
             } finally {
                 CaptureState.processing(null, null)
                 synchronized(procLock) { processingActive = false }

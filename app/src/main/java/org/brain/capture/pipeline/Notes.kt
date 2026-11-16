@@ -31,6 +31,9 @@ object Notes {
 
     fun cached(id: String): NoteView? = cache[id]
 
+    /** Drops the card's copy so it reloads the note from the vault. */
+    fun forget(id: String) { cache.remove(id) }
+
     /** Current path of [c]'s note; finds it by capture_id if it was moved or renamed. */
     suspend fun locate(ctx: Context, vault: VaultWriter, c: Capture): String? {
         val path = c.notePath ?: return null

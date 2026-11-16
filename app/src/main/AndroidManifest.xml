@@ -77,6 +77,10 @@
             </intent-filter>
         </activity>
 
+        <!-- GPU access for Gemma (LiteRT-LM); optional, CPU works without. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <!-- Hands copies of a shared card's files to the app the user picks; read-only, per share. -->
         <provider
             android:name="androidx.core.content.FileProvider"
