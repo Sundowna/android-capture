@@ -513,10 +513,23 @@ private fun TypeText(text: String, id: String, animate: Boolean, final: Boolean,
         }
         if (final) onDone(id)
     }
+    // Caught up but Whisper is still working on the next piece: the cursor blinks like a terminal's,
+    // and a muted line says what is going on, so the wait never looks like nothing is happening.
+    val waiting = animate && !final && shown >= text.length
+    val blink = rememberInfiniteTransition(label = "cursor")
+    val cursorAlpha by blink.animateFloat(1f, 0f, infiniteRepeatable(keyframes {
+        durationMillis = 1060
+        1f at 0; 1f at 500; 0f at 530; 0f at 1030
+    }), label = "blink")
     Text(androidx.compose.ui.text.buildAnnotatedString {
         append(text.substring(0, shown))
-        if (shown < text.length || (animate && !final)) withStyle(androidx.compose.ui.text.SpanStyle(color = Ink.Amber)) { append(" ▍") }
+        if (shown < text.length || (animate && !final))
+            withStyle(androidx.compose.ui.text.SpanStyle(color = Ink.Amber.copy(alpha = if (waiting) cursorAlpha else 1f))) { append(" ▍") }
     }, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
+    androidx.compose.animation.AnimatedVisibility(waiting, enter = fadeIn(tween(400)), exit = fadeOut(tween(200))) {
+        Text("Slicing what you said into 30-second bites…", fontSize = 13.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+            color = Ink.TextDim, modifier = Modifier.padding(top = 4.dp))
+    }
 }
 
 @Composable
