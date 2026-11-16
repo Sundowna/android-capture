@@ -290,6 +290,13 @@ class CaptureService : Service() {
                 })
                 .setContentText(r.minutesLeft?.let { "Storage low: about $it min of recording left" }
                     ?: if (CaptureState.isProcessing) "Earlier recording is being transcribed" else null)
+                // Android 16+ shows this as a status-bar chip with the timer, so the recording is
+                // visible from any app ("Live Update"); older versions ignore the request.
+                .addExtras(android.os.Bundle().apply {
+                    putBoolean("android.requestPromotedOngoing", true)
+                    // No short text: then the chip shows the running timer.
+                    if (r.paused) putString("android.shortCriticalText", "Paused")
+                })
                 .setUsesChronometer(!r.paused).setWhen(System.currentTimeMillis() - r.elapsedMs()).setShowWhen(!r.paused).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
                 .addAction(Notification.Action.Builder(null, "Discard", serviceIntent(ACTION_CANCEL)).build())

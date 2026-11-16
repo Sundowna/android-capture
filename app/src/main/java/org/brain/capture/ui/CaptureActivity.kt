@@ -61,6 +61,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -173,7 +174,9 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val dao = remember { CaptureDb.get(ctx).dao() }
     val recording by CaptureState.recording.collectAsState()
     val live by CaptureState.live.collectAsState()
-    val level by CaptureState.level.collectAsState()
+    // The voice level changes 20 times a second: read it only where it is drawn, never here.
+    val levelState = CaptureState.level.collectAsState()
+    val level = remember { { levelState.value } }
     val cleaningId by CleanupStep.cleaning.collectAsState()
 
     var mode by rememberSaveable { mutableStateOf(request?.mode ?: CaptureActivity.MODE_VOICE) }
@@ -517,27 +520,45 @@ private fun Footer(c: Capture?, view: View, recording: Boolean) {
 }
 
 /** Real input level, newest on the right: amber while recording, grey otherwise. */
+/**
+ * Drawn in one pass on a canvas, and the level is only read while drawing: the voice moves the
+ * bars without redrawing (recomposing) anything else on the screen.
+ */
 @Composable
-private fun Waveform(level: Float, active: Boolean) {
-    val bars = remember { mutableStateListOf<Float>().apply { repeat(28) { add(0f) } } }
-    var current by remember { mutableStateOf(0f) }
-    current = level
+private fun Waveform(level: () -> Float, active: Boolean) {
+    val target = remember { FloatArray(28) }
+    val shown = remember { FloatArray(28) }
+    val frame = remember { mutableIntStateOf(0) }
     LaunchedEffect(active) {
-        while (true) { bars.removeAt(0); bars.add(if (active) current else 0f); delay(70) }
+        while (true) {
+            System.arraycopy(target, 1, target, 0, target.size - 1)
+            target[target.size - 1] = if (active) level() else 0f
+            frame.intValue++
+            delay(70)
+        }
     }
-    Row(Modifier.fillMaxWidth().height(52.dp).semantics { contentDescription = "Input level" },
-        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        bars.forEach { v ->
-            val h by animateFloatAsState(8f + 42f * v, spring(stiffness = 600f), label = "bar")
-            Box(Modifier.width(5.dp).height(h.dp).clip(RoundedCornerShape(3.dp))
-                .background(if (active) Ink.Amber.copy(alpha = 0.55f + 0.45f * v) else Ink.Bar))
+    val amber = Ink.Amber
+    val grey = Ink.Bar
+    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(52.dp).semantics { contentDescription = "Input level" }) {
+        @Suppress("UNUSED_EXPRESSION") frame.intValue // redraw on each new sample
+        val w = 5.dp.toPx(); val gap = 4.dp.toPx(); val r = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+        val total = target.size * w + (target.size - 1) * gap
+        var x = (size.width - total) / 2f
+        for (i in target.indices) {
+            shown[i] += (target[i] - shown[i]) * 0.55f // a little smoothing, so bars glide
+            val v = shown[i]
+            val h = (8f + 42f * v).dp.toPx()
+            drawRoundRect(if (active) amber.copy(alpha = 0.55f + 0.45f * v) else grey,
+                topLeft = androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2f),
+                size = androidx.compose.ui.geometry.Size(w, h), cornerRadius = r)
+            x += w + gap
         }
     }
 }
 
 @Composable
 private fun Controls(
-    recordingHere: Boolean, paused: Boolean, elapsedMs: () -> Long, canUndo: Boolean, level: Float, buttonModifier: Modifier,
+    recordingHere: Boolean, paused: Boolean, elapsedMs: () -> Long, canUndo: Boolean, level: () -> Float, buttonModifier: Modifier,
     onRecord: () -> Unit, onPause: () -> Unit, onDiscard: () -> Unit, onUndo: () -> Unit,
 ) {
     var tick by remember { mutableLongStateOf(0L) }
@@ -577,7 +598,7 @@ private fun SmallAction(label: String, onClick: () -> Unit) {
  * halo breathes around it in a slow, even rhythm (no beat, no thump); the button stays still.
  */
 @Composable
-fun BigButton(recording: Boolean, paused: Boolean, level: Float, size: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun BigButton(recording: Boolean, paused: Boolean, level: () -> Float, size: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val t = rememberInfiniteTransition(label = "heart")
     // A resting heartbeat (about 55 a minute): a strong "lub", a softer "dub" right after,
     // then a long, slow ease back to rest before the next beat.

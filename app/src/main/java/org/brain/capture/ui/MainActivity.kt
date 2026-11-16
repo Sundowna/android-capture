@@ -162,7 +162,9 @@ private fun HomeScreen(
     val prefs = remember { Prefs(ctx) }
     val dao = remember { CaptureDb.get(ctx).dao() }
     val phase by CaptureState.phase.collectAsState()
-    val level by CaptureState.level.collectAsState()
+    // Read the voice level only where it is drawn, so the list does not redraw 20 times a second.
+    val levelState = CaptureState.level.collectAsState()
+    val level = remember { { levelState.value } }
     val live by CaptureState.live.collectAsState()
     var limit by remember { mutableIntStateOf(prefs.cardCount) }
     val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
@@ -321,7 +323,7 @@ private fun Elapsed(r: RecordingInfo, size: androidx.compose.ui.unit.TextUnit) {
 
 /** Top bar while recording: pulsing level lines, "Recording" and the time; tap to open, square to stop. */
 @Composable
-private fun RecordingBar(r: RecordingInfo, level: Float, onOpen: () -> Unit, onStop: () -> Unit) {
+private fun RecordingBar(r: RecordingInfo, level: () -> Float, onOpen: () -> Unit, onStop: () -> Unit) {
     Surface(onClick = onOpen, color = Ink.Raised, shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
         shadowElevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.statusBarsPadding().padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -342,14 +344,19 @@ private fun RecordingBar(r: RecordingInfo, level: Float, onOpen: () -> Unit, onS
 
 /** Five little lines that pulse with the voice. */
 @Composable
-private fun MiniLevel(level: Float, active: Boolean) {
+private fun MiniLevel(level: () -> Float, active: Boolean) {
     val t = rememberInfiniteTransition(label = "mini")
-    val phase by t.animateFloat(0f, 6.28f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "p")
-    val v by animateFloatAsState(if (active) level else 0f, spring(stiffness = 400f), label = "v")
-    Row(Modifier.height(22.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-        repeat(5) { i ->
-            val wobble = if (active) (kotlin.math.sin(phase + i * 1.1f) + 1f) / 2f else 0f
-            Box(Modifier.width(3.dp).height((5 + 9 * wobble + 8 * v).dp).clip(RoundedCornerShape(2.dp)).background(Ink.Amber))
+    val phase = t.animateFloat(0f, 6.28f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "p")
+    val amber = Ink.Amber
+    // Drawn on a canvas; the animation and the level are only read while drawing (no recomposition).
+    androidx.compose.foundation.Canvas(Modifier.width(27.dp).height(22.dp)) {
+        val v = if (active) level() else 0f
+        val w = 3.dp.toPx(); val gap = 3.dp.toPx(); val r = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+        for (i in 0 until 5) {
+            val wobble = if (active) (kotlin.math.sin(phase.value + i * 1.1f) + 1f) / 2f else 0f
+            val h = (5 + 9 * wobble + 8 * v).dp.toPx()
+            drawRoundRect(amber, topLeft = androidx.compose.ui.geometry.Offset(i * (w + gap), (size.height - h) / 2f),
+                size = androidx.compose.ui.geometry.Size(w, h), cornerRadius = r)
         }
     }
 }

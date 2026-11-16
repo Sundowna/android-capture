@@ -27,6 +27,18 @@ import java.io.File
 object GemmaHolder {
     private const val TAG = "Gemma"
     private const val IDLE_MS = 10 * 60 * 1000L
+    private const val WARM_DELAY_MS = 1500L
+
+    /**
+     * Runs [block] at background priority (threads the model starts inherit it), so the screen
+     * always gets the processor first; the thread's own priority is restored afterwards.
+     */
+    fun <T> background(block: () -> T): T {
+        val tid = android.os.Process.myTid()
+        val before = android.os.Process.getThreadPriority(tid)
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+        try { return block() } finally { android.os.Process.setThreadPriority(before) }
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
@@ -46,13 +58,17 @@ object GemmaHolder {
     /** Starts loading in the background if a model is installed. */
     fun warm(ctx: Context) {
         if (modelFile(ctx) == null) return
-        scope.launch { runCatching { lock.withLock { ensureLoaded(ctx.applicationContext) } }
-            .onFailure { Log.w(TAG, "Warm-load failed", it) } }
+        scope.launch {
+            // Let the capture screen finish sliding in first: the GPU load briefly stalls drawing.
+            delay(WARM_DELAY_MS)
+            runCatching { lock.withLock { background { ensureLoaded(ctx.applicationContext) } } }
+                .onFailure { Log.w(TAG, "Warm-load failed", it) }
+        }
     }
 
     /** One prompt, one answer, in a fresh conversation (no history carried between notes). */
     suspend fun generate(ctx: Context, prompt: String): String = lock.withLock {
-        val e = ensureLoaded(ctx.applicationContext)
+        val e = background { ensureLoaded(ctx.applicationContext) }
         idleJob?.cancel()
         try {
             e.createConversation(
@@ -61,7 +77,7 @@ object GemmaHolder {
                     thinkingConfig = ThinkingConfig(enableThinking = false),
                     extraContext = mapOf("enable_thinking" to false),
                 )
-            ).use { it.sendMessage(prompt).toString().trim() }
+            ).use { c -> background { c.sendMessage(prompt).toString().trim() } }
         } finally {
             scheduleUnload()
         }

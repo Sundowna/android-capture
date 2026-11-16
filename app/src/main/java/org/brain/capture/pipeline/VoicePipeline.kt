@@ -122,6 +122,11 @@ class VoicePipeline(private val context: Context) {
         val store = ModelStore(context)
         if (!store.isInstalled()) error("Speech model not installed")
         CaptureState.set(Phase.LoadingModel)
+        // Background priority (Whisper's worker threads inherit it): the screen stays smooth.
+        return org.brain.capture.cleanup.GemmaHolder.background { transcribeWith(store, wav, profile, seconds, captureId) }
+    }
+
+    private fun transcribeWith(store: ModelStore, wav: File, profile: WavReader.Profile, seconds: Double, captureId: String): LastResult {
         val t0 = SystemClock.elapsedRealtime()
         WhisperOnnx(store.dir).use { whisper ->
             val loadMs = SystemClock.elapsedRealtime() - t0
