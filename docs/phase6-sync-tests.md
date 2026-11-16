@@ -64,3 +64,26 @@ inside it, Send & Receive on both sides, `.capture-*.tmp` ignored). Brain Captur
 | 8 | Pass | Phone in flight mode at 10:40:44. The 10:27 note got a line on the PC at 10:40:47 and a typed T+ addition on the phone at 10:41:07. Back online, Syncthing settled at 10:42:11: the phone's version (the newer one) stayed as the note, and the PC's version was kept next to it as `… short test.sync-conflict-20261116-104211-GOXCE7H.md`. Both files are on both devices with matching MD5, 0 sync errors, nothing lost. The four earlier PC lines are in both files; the offline PC line is only in the conflict copy and has to be merged by hand. While reconnecting, the PC log showed four short "folder is not running" connection drops within 4 s; they cleared by themselves. Card checked on the phone's screen at 10:43: one card for the note, showing the four PC lines and "Added 10:41:07 (typed)", and no card for the conflict copy. |
 
 Obsidian on the phone (checked 2026-11-16 10:47 to 10:50, taps over USB): `Documents/Brain` is open as a vault, 3,544 files in 198 folders. The file search found chat notes by title and one opened with its properties. The wiki page `40 Wiki/Research/GPU for local AI` rendered with callouts and tables, and its link to the chat note `2026-11-03 Find the best GPU for local AI` opened that note. Links to files that are not shared (images, `.json`, `.jsonl`) show as not yet created, as designed.
+
+### Follow-up: the PC's file watcher (2026-11-16, 12:20 to 12:26)
+
+Test 4 on the real vault was first made to pass with short rescan intervals. The cause was found
+afterwards with Syncthing 2's debug log (`POST /rest/system/loglevels` with
+`{"fs":"DEBUG","watchaggregator":"DEBUG"}`): each of the two folders' watchers works on its own, but
+with both on (`brain-mobile` lies inside `brain-read`) neither received a change. The watcher of the
+outer folder alone, and the watcher of the inner folder alone, both delivered the change at once.
+
+Fix, on the PC only:
+
+| Folder | Watcher | Rescan |
+|---|---|---|
+| `brain-read` (whole vault) | on | 3600 s (default safety net) |
+| `brain-mobile` (`00 Inbox/Mobile`) | off | 10 s (a few files, cheap) |
+
+Measured after the fix, from a change on the PC to the file on the phone: vault note 9, 13 and 15 s;
+capture note in `00 Inbox/Mobile` 4 and 9 s. Phone to PC (Brain Capture's notes and audio) does not
+depend on the PC's watcher and stays at about 10 s. Do not turn the `brain-mobile` watcher back on.
+
+Also seen: a rescan of `brain-read` walks the whole vault, including the excluded `80 Archive` and
+`.git`, because `!` (include) patterns keep Syncthing from skipping excluded folders. That is why its
+rescan stays hourly rather than every minute.
