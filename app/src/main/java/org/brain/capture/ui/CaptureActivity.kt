@@ -64,6 +64,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.text.withStyle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -198,6 +200,10 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val additions by remember(noteId) { noteId?.let { dao.watchAdditions(it) } ?: flowOf(emptyList()) }.collectAsState(emptyList())
     val sections = remember(note, additions) { listOfNotNull(note) + additions }
     val recordingHere = recording != null && (recording?.captureId == noteId || recording?.appendTo == noteId)
+    val gemmaInstalled = remember { GemmaHolder.modelFile(ctx) != null }
+    // Still being transcribed or cleaned: the note is not finished yet.
+    val noteBusy = sections.any { it.kind == "voice" &&
+        (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && it.transcript.isNotBlank())) }
     // Adding to the note on screen: only once it is saved, and not to private notes (they never touch the vault).
     val canAdd = note?.state == CaptureStates.SAVED && note?.isPrivate == false && !undone
 
@@ -242,7 +248,25 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val last = sections.lastOrNull()
     val lastFailed = last?.cleanup != null && last.clean == null && last.kind == "voice"
     // Start on the exact words as they arrive; glide over to Clean once the AI is done.
-    LaunchedEffect(last?.clean, sections.size) { if (!userPickedView) view = if (last?.clean != null) View.Clean else View.Raw }
+    // Captures this screen saw arrive (recorded or transcribed while open): their words type out.
+    val watched = remember { mutableStateListOf<String>() }
+    val revealed = remember { mutableStateMapOf<String, Int>() }
+    var typedDone by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(sections, recording?.captureId) {
+        recording?.captureId?.let { if (it !in watched) watched += it }
+        sections.forEach { if (it.kind == "voice" && it.transcript == null && it.id !in watched) watched += it.id }
+    }
+    // Exact words first, typed out as they arrive; a second after the last letter, glide over to
+    // Clean, where "Cleaning on this phone" pulses until the clean version is there.
+    LaunchedEffect(last?.id, last?.clean != null, typedDone, recordingHere) {
+        if (userPickedView) return@LaunchedEffect
+        val l = last
+        when {
+            l == null || recordingHere -> view = View.Raw
+            l.id in watched -> if (typedDone == l.id && !l.transcript.isNullOrBlank()) { delay(1000); view = View.Clean } else view = View.Raw
+            else -> view = if (l.clean != null) View.Clean else View.Raw
+        }
+    }
     // The note shown decides the zone and kind chips (an opened private note shows Private).
     LaunchedEffect(note?.id) { note?.let { if (it.isPrivate) private = true else { private = false; kind = it.type } } }
 
@@ -283,8 +307,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 when (mode) {
                     CaptureActivity.MODE_VOICE -> NoteCardView(
                         sections = if (undone) emptyList() else sections, view = view, recording = recording,
-                        liveText = live, cleaningId = cleaningId, gemmaInstalled = remember { GemmaHolder.modelFile(ctx) != null },
-                        undone = undone,
+                        liveText = live, cleaningId = cleaningId, gemmaInstalled = gemmaInstalled,
+                        undone = undone, watched = watched, revealed = revealed, onTyped = { typedDone = it },
                     )
                     else -> TextCard(mode, private, kind, onSaved = { c ->
                         noteId = c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
@@ -295,15 +319,15 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             if (mode == CaptureActivity.MODE_VOICE) {
                 Waveform(level, active = recordingHere && recording?.paused != true)
                 // What the big button will do, so it is never a surprise.
-                val adding = canAdd && !recordingHere
+                val adding = canAdd && !recordingHere && !noteBusy
                 Row(Modifier.fillMaxWidth().height(20.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     when {
                         recordingHere && recording?.appendTo != null -> Text("Adding to this note", fontSize = 12.sp, color = Ink.TextDim)
                         // Looking at another note while recording: say so, and one tap goes back to the one being recorded.
                         recording != null && !recordingHere -> {
-                            Text(if (recording?.appendTo != null) "Adding to another note · " else "Recording a new note · ",
+                            Text(if (recording?.appendTo != null) "Adding to another note · " else "Recording another note · ",
                                 fontSize = 12.sp, color = Ink.TextDim)
-                            Text("Go to it", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber,
+                            Text("Go to note", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber,
                                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable {
                                     recording?.let { r -> noteId = r.appendTo ?: r.captureId; undone = false; userPickedView = false }
                                 }.padding(horizontal = 4.dp, vertical = 2.dp))
@@ -407,6 +431,7 @@ private val TIME = SimpleDateFormat("HH:mm", Locale.ROOT)
 private fun NoteCardView(
     sections: List<Capture>, view: View, recording: org.brain.capture.RecordingInfo?, liveText: org.brain.capture.LiveText?,
     cleaningId: String?, gemmaInstalled: Boolean, undone: Boolean,
+    watched: List<String>, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit,
 ) {
     val scroll = rememberScrollState()
     // Keep the newest words in sight as they arrive.
@@ -429,7 +454,8 @@ private fun NoteCardView(
                 color = Ink.TextDim, modifier = Modifier.padding(top = 8.dp))
             Section(c, view, recordingThis = c.id == recordingSection, paused = recording?.paused == true,
                 live = liveText?.takeIf { it.captureId == c.id }?.text, cleaning = cleaningId == c.id,
-                gemmaInstalled = gemmaInstalled, first = i == 0)
+                gemmaInstalled = gemmaInstalled, first = i == 0,
+                typing = c.id in watched, revealed = revealed, onTyped = onTyped)
         }
         // The footer only once everything in the note is done (no half-finished promise).
         val busy = recording != null && sections.any { it.id == recordingSection } ||
@@ -440,7 +466,10 @@ private fun NoteCardView(
 }
 
 @Composable
-private fun Section(c: Capture, view: View, recordingThis: Boolean, paused: Boolean, live: String?, cleaning: Boolean, gemmaInstalled: Boolean, first: Boolean) {
+private fun Section(
+    c: Capture, view: View, recordingThis: Boolean, paused: Boolean, live: String?, cleaning: Boolean, gemmaInstalled: Boolean, first: Boolean,
+    typing: Boolean, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit,
+) {
     val transcript = c.transcript
     when {
         recordingThis -> Hint(if (paused) "Paused" else "Listening…",
@@ -449,9 +478,15 @@ private fun Section(c: Capture, view: View, recordingThis: Boolean, paused: Bool
         view == View.Raw -> {
             val words = transcript ?: live
             if (words.isNullOrBlank()) Hint("Transcribing…", "Whisper is writing down your words, on this phone.")
-            else Text(words, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
+            else TypeText(words, c.id, animate = typing, final = transcript != null, revealed = revealed, onDone = onTyped)
         }
-        c.clean != null -> CleanView(c.clean, transcript.orEmpty(), showTitle = first)
+        // Cleaning, then the clean version: one cross-fade from the pulsing placeholder to the bullets.
+        c.clean != null || (!transcript.isNullOrBlank() && c.cleanup == null && gemmaInstalled) ->
+            androidx.compose.animation.Crossfade(c.clean, animationSpec = tween(600, easing = FastOutSlowInEasing), label = "clean") { clean ->
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (clean != null) CleanView(clean, transcript.orEmpty(), showTitle = first) else Cleaning(cleaning)
+                }
+            }
         transcript == null -> Hint("Transcribing…", "The clean version follows as soon as Whisper is done.")
         transcript.isBlank() -> Hint("No speech recognised", "The recording is kept with the note.")
         c.cleanup != null || !gemmaInstalled -> {
@@ -461,6 +496,27 @@ private fun Section(c: Capture, view: View, recordingThis: Boolean, paused: Bool
         }
         else -> Cleaning(cleaning)
     }
+}
+
+/**
+ * The exact words, typed out letter by letter like an AI answer: quick (well under a second to
+ * catch up), with a small amber cursor while it types. Words already shown are never typed again.
+ */
+@Composable
+private fun TypeText(text: String, id: String, animate: Boolean, final: Boolean, revealed: MutableMap<String, Int>, onDone: (String) -> Unit) {
+    val shown = if (animate) (revealed[id] ?: 0).coerceAtMost(text.length) else text.length
+    LaunchedEffect(text, animate, final) {
+        if (animate) {
+            var n = revealed[id] ?: 0
+            val step = maxOf(1, (text.length - n) / 45)
+            while (n < text.length) { n = minOf(text.length, n + step); revealed[id] = n; delay(16) }
+        }
+        if (final) onDone(id)
+    }
+    Text(androidx.compose.ui.text.buildAnnotatedString {
+        append(text.substring(0, shown))
+        if (shown < text.length || (animate && !final)) withStyle(androidx.compose.ui.text.SpanStyle(color = Ink.Amber)) { append(" ▍") }
+    }, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
 }
 
 @Composable
@@ -475,7 +531,7 @@ private fun Cleaning(active: Boolean) {
     val t = rememberInfiniteTransition(label = "shimmer")
     val a by t.animateFloat(0.35f, 0.75f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "a")
     Text(if (active) "Cleaning on this phone…" else "Cleaning next, on this phone…", fontFamily = Grotesk,
-        fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Ink.Text)
+        fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Ink.Text.copy(alpha = 0.55f + 0.45f * (a - 0.35f) / 0.4f))
     listOf(0.92f, 0.78f, 0.6f).forEach { w ->
         Box(Modifier.fillMaxWidth(w).height(14.dp).clip(RoundedCornerShape(7.dp)).background(Ink.Raised.copy(alpha = a)))
     }
