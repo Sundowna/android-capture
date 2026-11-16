@@ -11,7 +11,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.EaseInOutSine
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -180,7 +187,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     LaunchedEffect(recording?.captureId) {
         val r = recording ?: return@LaunchedEffect
         noteId = r.appendTo ?: r.captureId
-        undone = false; userPickedView = false; view = View.Clean
+        undone = false; userPickedView = false; view = View.Raw
     }
     val note by remember(noteId) { noteId?.let { dao.watch(it) } ?: flowOf(null) }.collectAsState(null)
     val additions by remember(noteId) { noteId?.let { dao.watchAdditions(it) } ?: flowOf(emptyList()) }.collectAsState(emptyList())
@@ -208,7 +215,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoice(appendTo)
         else { pendingAppend = appendTo; permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
     }
-    fun newNote() { noteId = null; undone = false; userPickedView = false; view = View.Clean }
+    fun newNote() { noteId = null; undone = false; userPickedView = false; view = View.Raw }
 
     // A widget, tile or app request: switch to it, and start talking if asked.
     LaunchedEffect(request?.at) {
@@ -229,7 +236,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     // Show the clean version once there is one; the exact words when the check kept them.
     val last = sections.lastOrNull()
     val lastFailed = last?.cleanup != null && last.clean == null && last.kind == "voice"
-    LaunchedEffect(last?.clean, lastFailed) { if (!userPickedView) view = if (lastFailed) View.Raw else View.Clean }
+    // Start on the exact words as they arrive; glide over to Clean once the AI is done.
+    LaunchedEffect(last?.clean, sections.size) { if (!userPickedView) view = if (last?.clean != null) View.Clean else View.Raw }
     // The note shown decides the zone and kind chips (an opened private note shows Private).
     LaunchedEffect(note?.id) { note?.let { if (it.isPrivate) private = true else { private = false; kind = it.type } } }
 
@@ -238,8 +246,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             Modifier.fillMaxSize().safeDrawingPadding().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            TopBar(private, locked = recording != null || note?.state == CaptureStates.SAVED,
-                onPrivate = { private = it }, onClose = onClose)
+            TopBar(private, locked = recording?.appendTo != null,
+                onPrivate = { p -> if (note?.state == CaptureStates.SAVED && p != private) newNote(); private = p }, onClose = onClose)
 
             if (mode == CaptureActivity.MODE_VOICE) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -381,6 +389,10 @@ private fun NoteCardView(
         scroll.animateScrollTo(scroll.maxValue)
     }
     val recordingSection = recording?.captureId
+    AnimatedContent(view, label = "view", transitionSpec = {
+        (fadeIn(tween(520, 120, FastOutSlowInEasing)) + slideInHorizontally(tween(560, 80, FastOutSlowInEasing)) { if (targetState == View.Clean) it / 8 else -it / 8 }) togetherWith
+            (fadeOut(tween(260)) + slideOutHorizontally(tween(420, easing = FastOutSlowInEasing)) { if (targetState == View.Clean) -it / 10 else it / 10 })
+    }) { view ->
     Column(Modifier.fillMaxSize().padding(18.dp).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         when {
             undone -> Hint("Undone", "The note moved to the vault's .trash folder (private ones are deleted). Tap the button to talk again.")
@@ -398,6 +410,7 @@ private fun NoteCardView(
         val busy = recording != null && sections.any { it.id == recordingSection } ||
             sections.any { it.kind == "voice" && (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && !it.transcript.isNullOrBlank())) }
         if (!undone) Footer(sections.firstOrNull(), view, busy)
+    }
     }
 }
 
@@ -541,28 +554,28 @@ private fun SmallAction(label: String, onClick: () -> Unit) {
 
 /**
  * The amber button, used on the main screen and the capture screen (the main screen's one slides
- * down into this place). Microphone to start, a square to stop and save. While recording, rings
- * ripple out of it in a slow, smooth pulse and it swells a little with the voice.
+ * down into this place). Microphone to start, a square to stop and save. While recording, a soft
+ * halo breathes around it in a slow, even rhythm (no beat, no thump); the button stays still.
  */
 @Composable
 fun BigButton(recording: Boolean, paused: Boolean, level: Float, size: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val t = rememberInfiniteTransition(label = "pulse")
-    val wave by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "wave")
-    val breathe by t.animateFloat(1f, 1.05f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
-    val voice by animateFloatAsState(if (recording && !paused) level else 0f, spring(stiffness = 300f), label = "voice")
+    // One full breath every 3.2 s, eased in and out, so it never jerks.
+    val breath by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse), label = "breath")
     val pulsing = recording && !paused
+    val on by animateFloatAsState(if (pulsing) 1f else 0f, tween(600, easing = FastOutSlowInEasing), label = "on")
     Box(modifier.size(size * 1.6f), contentAlignment = Alignment.Center) {
-        if (pulsing) {
-            // Two rings, half a cycle apart, growing and fading out of the button.
-            listOf(wave, (wave + 0.5f) % 1f).forEach { p ->
-                Box(Modifier.size(size).graphicsLayer {
-                    val s = 1f + 0.6f * p
-                    scaleX = s; scaleY = s; alpha = 0.32f * (1f - p)
-                }.clip(CircleShape).background(Ink.Amber))
-            }
-        } else Box(Modifier.size(size * 1.19f).clip(CircleShape).background(Ink.Amber.copy(alpha = if (paused) 0.18f else 0.12f)))
+        // Outer soft glow and inner halo, breathing together; at rest they settle to a faint ring.
+        Box(Modifier.size(size).graphicsLayer {
+            val s = 1.19f + on * (0.12f + 0.22f * breath)
+            scaleX = s; scaleY = s; alpha = 0.12f + on * (0.10f - 0.06f * breath)
+        }.clip(CircleShape).background(Ink.Amber))
+        Box(Modifier.size(size).graphicsLayer {
+            val s = 1f + on * (0.06f + 0.10f * breath)
+            scaleX = s; scaleY = s; alpha = on * (0.22f - 0.08f * breath)
+        }.clip(CircleShape).background(Ink.Amber))
         Surface(onClick = onClick, shape = CircleShape, color = Ink.Amber, shadowElevation = 4.dp,
-            modifier = Modifier.size(size).scale(if (pulsing) breathe + 0.06f * voice else 1f).semantics {
+            modifier = Modifier.size(size).semantics {
                 contentDescription = if (recording) "Stop and save" else "Start talking"
             }) {
             Box(contentAlignment = Alignment.Center) {
@@ -606,7 +619,8 @@ private fun TextCard(mode: String, private: Boolean, kind: String, onSaved: (Cap
             text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
         } else runCatching { focus.requestFocus() }
     }
-    Column(Modifier.fillMaxSize().padding(18.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // No extra keyboard padding here: the screen already makes room for the keyboard.
+    Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (text.isEmpty()) Text(if (mode == CaptureActivity.MODE_PASTE) "The clipboard is empty." else "Type anything…",
                 fontSize = 15.sp, color = Ink.TextDim)
@@ -616,7 +630,7 @@ private fun TextCard(mode: String, private: Boolean, kind: String, onSaved: (Cap
         }
         error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (private) "Kept on this phone only" else if (kind == CaptureTypes.TASK) "Saved as a task note" else "Saved to your inbox",
+            Text(if (private) "Kept on this phone only" else if (kind == CaptureTypes.TASK) "Goes to your inbox as a task note" else "Goes to your inbox",
                 fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f))
             PillButton(if (busy) "Saving…" else "Save", enabled = text.isNotBlank() && !busy) {
                 busy = true; error = null

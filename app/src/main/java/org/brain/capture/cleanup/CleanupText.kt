@@ -14,7 +14,7 @@ Rules: remove filler words and repeats, fix grammar, put related points together
 Use only what the speaker said. Add no facts, opinions or conclusions.
 Keep the language of the transcript.
 After each bullet, give the transcript segment numbers it came from, e.g. [2,3].
-First line: "Title: " and a short title of at most 8 words, in the language of the transcript.
+First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
 Then the bullet points only, one per line, each starting with "- "."""
 
     /** Instruction for tasks: a checklist; [today] lets the model turn "Friday" into a date. */
@@ -25,7 +25,7 @@ Use only what the speaker said. Add no tasks, facts or opinions.
 Keep the language of the transcript.
 If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
 After each task, give the transcript segment numbers it came from, e.g. [2,3].
-First line: "Title: " and a short title of at most 8 words, in the language of the transcript.
+First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
 Then the tasks only, one per line, each starting with "- [ ] "."""
 
     private val SENTENCE_END = Regex("""(?<=[.!?…])\s+""")

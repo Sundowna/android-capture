@@ -11,6 +11,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloat
@@ -133,14 +134,16 @@ private fun App(retryRequest: MutableState<Boolean>) {
             else -> SharedTransitionLayout {
                 AnimatedContent(capture, label = "flow",
                     contentKey = { it != null },
-                    transitionSpec = { fadeIn(tween(260, delayMillis = 60)) togetherWith fadeOut(tween(180)) }) { req ->
-                    // The big amber button is one element: it slides between its place on the list and in the capture view.
+                    transitionSpec = { fadeIn(tween(420, delayMillis = 120, easing = FastOutSlowInEasing)) togetherWith
+                        fadeOut(tween(260, easing = FastOutSlowInEasing)) }) { req ->
+                    // The big amber button is one element: it glides between its place on the list and in the capture view.
                     val shared = Modifier.sharedElement(rememberSharedContentState("record"), this@AnimatedContent,
-                        boundsTransform = { _, _ -> spring(dampingRatio = 0.82f, stiffness = 260f) })
+                        boundsTransform = { _, _ -> tween(650, easing = FastOutSlowInEasing) })
                     if (req != null) CaptureScreen(req, onClose = { capture = null }, buttonModifier = shared,
                         cardModifier = Modifier.animateEnterExit(
-                            enter = fadeIn(tween(260, 80)) + slideInVertically(tween(320, 40)) { it / 4 },
-                            exit = fadeOut(tween(140))))
+                            enter = fadeIn(tween(480, 160, FastOutSlowInEasing)) +
+                                slideInVertically(tween(620, 80, FastOutSlowInEasing)) { it / 5 },
+                            exit = fadeOut(tween(220))))
                     else HomeScreen(retryRequest, recording, shared,
                         onSettings = { showSettings = true },
                         onCapture = { capture = it })
