@@ -6,6 +6,36 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import org.brain.capture.RecordingInfo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -81,6 +111,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun App(retryRequest: MutableState<Boolean>) {
     val ctx = LocalContext.current
@@ -88,29 +119,53 @@ private fun App(retryRequest: MutableState<Boolean>) {
     var showSettings by remember { mutableStateOf(false) }
     var setupTick by remember { mutableIntStateOf(0) }
     val setupDone = remember(showSettings, setupTick) { prefs.vaultUri != null && ModelStore(ctx).isInstalled() }
+    // The capture view grows out of this screen (no second screen sliding in). Null = the notes list.
+    var capture by remember { mutableStateOf<CaptureRequest?>(null) }
+    val recording by CaptureState.recording.collectAsState()
+    // Opening the app while something records shows that recording.
+    LaunchedEffect(Unit) { if (CaptureState.isRecording) capture = CaptureRequest() }
+    BackHandler(enabled = capture != null) { capture = null }
+
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when {
             !setupDone -> FirstRunScreen(onChanged = { setupTick++ })
             showSettings -> SettingsScreen(onBack = { showSettings = false })
-            else -> HomeScreen(retryRequest, onSettings = { showSettings = true })
+            else -> SharedTransitionLayout {
+                AnimatedContent(capture, label = "flow",
+                    contentKey = { it != null },
+                    transitionSpec = { fadeIn(tween(260, delayMillis = 60)) togetherWith fadeOut(tween(180)) }) { req ->
+                    // The big amber button is one element: it slides between its place on the list and in the capture view.
+                    val shared = Modifier.sharedElement(rememberSharedContentState("record"), this@AnimatedContent,
+                        boundsTransform = { _, _ -> spring(dampingRatio = 0.82f, stiffness = 260f) })
+                    if (req != null) CaptureScreen(req, onClose = { capture = null }, buttonModifier = shared,
+                        cardModifier = Modifier.animateEnterExit(
+                            enter = fadeIn(tween(260, 80)) + slideInVertically(tween(320, 40)) { it / 4 },
+                            exit = fadeOut(tween(140))))
+                    else HomeScreen(retryRequest, recording, shared,
+                        onSettings = { showSettings = true },
+                        onCapture = { capture = it })
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Unit) {
+private fun HomeScreen(
+    retryRequest: MutableState<Boolean>, recording: RecordingInfo?, buttonModifier: Modifier,
+    onSettings: () -> Unit, onCapture: (CaptureRequest) -> Unit,
+) {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
     val dao = remember { CaptureDb.get(ctx).dao() }
     val phase by CaptureState.phase.collectAsState()
-    val recording by CaptureState.recording.collectAsState()
     val level by CaptureState.level.collectAsState()
     val live by CaptureState.live.collectAsState()
     var limit by remember { mutableIntStateOf(prefs.cardCount) }
     val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
     val total by remember { dao.cardCount() }.collectAsState(0)
     val pendingRows by remember { dao.inProgress() }.collectAsState(emptyList())
-    // Only recordings whose audio still exists, and not the one being recorded right now (the hero shows that).
+    // Only recordings whose audio still exists, and not the one being recorded right now.
     val pending = pendingRows.filter { c -> c.stagingPath?.let { File(it).exists() } == true && c.stagingPath != recording?.file }
 
     // Re-read notes when coming back to the app (e.g. after editing in Obsidian).
@@ -128,75 +183,66 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
         if (retryRequest.value) { retryRequest.value = false; CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING) }
     }
 
-    // "Saved" highlight on the card for a few seconds, plus a short confirmation with one useful action.
+    // A short highlight on the card that just changed.
     val saved = phase as? Phase.Saved
     var highlightUntil by remember { mutableLongStateOf(0L) }
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(saved?.atMs) {
-        val s = saved ?: return@LaunchedEffect
-        if (s.atMs < resumedAt) return@LaunchedEffect // saved while the app was not visible
-        highlightUntil = s.atMs + 5000
-        val r = snackbar.showSnackbar(
-            message = if (s.appended) "Added to the note" else "Saved to your vault",
-            actionLabel = "Open in Obsidian", duration = SnackbarDuration.Short)
-        if (r == SnackbarResult.ActionPerformed) openInObsidian(ctx, s.notePath)
-    }
+    LaunchedEffect(saved?.atMs) { val s = saved ?: return@LaunchedEffect; if (s.atMs >= resumedAt) highlightUntil = s.atMs + 5000 }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(highlightUntil) { while (System.currentTimeMillis() < highlightUntil) { delay(500); now = System.currentTimeMillis() }; now = System.currentTimeMillis() }
 
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
-        if (r[Manifest.permission.RECORD_AUDIO] == true) CaptureService.send(ctx, CaptureService.ACTION_START)
-    }
-    fun toggleRecording(appendTo: Capture? = null) {
-        when {
-            recording != null -> CaptureService.send(ctx, CaptureService.ACTION_STOP)
-            ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED ->
-                CaptureService.send(ctx, CaptureService.ACTION_START) {
-                    if (appendTo != null) {
-                        putExtra(CaptureService.EXTRA_APPEND_TO, appendTo.id)
-                        putExtra(CaptureService.EXTRA_APPEND_LABEL, appendTo.notePath)
-                    }
-                }
-            else -> permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS))
-        }
-    }
+    // The hero (big button + time) folds into the small bar at the top as the list scrolls.
+    val list = rememberLazyListState()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val heroPx = with(density) { 220.dp.toPx() }
+    val collapse by remember { derivedStateOf {
+        if (list.firstVisibleItemIndex > 1) 1f else if (list.firstVisibleItemIndex == 1) (list.firstVisibleItemScrollOffset / heroPx).coerceIn(0f, 1f)
+        else 0f
+    } }
+    val barShown = recording != null && collapse > 0.35f
     val canRecord = recording == null
-    val listAlpha by animateFloatAsState(if (recording != null) 0.38f else 1f, label = "dim")
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbar) },
-    ) { inner ->
+    Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize().padding(inner),
+            Modifier.fillMaxSize().safeDrawingPadding(), state = list,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item("top") {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Brain", fontFamily = Grotesk, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    if (recording == null) IconButton(onClick = onSettings) {
+                    IconButton(onClick = onSettings) {
                         Icon(painterResource(R.drawable.ic_tune), "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
-                        PulsingDot()
-                        Text("  REC", style = MaterialTheme.typography.labelLarge, color = brand().record)
                     }
                 }
             }
             item("hero") {
-                RecordHero(recording, level, enabled = true,
-                    idleHint = "Tap to talk · nothing to decide now",
-                    onDiscard = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL) },
-                    // The capture screen is where talking happens; it starts at once.
-                    onClick = { ctx.startActivity(CaptureActivity.intent(ctx, start = recording == null)) })
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp).graphicsLayer {
+                    // Shrinks and fades toward the bar as it scrolls away.
+                    val f = if (recording != null) collapse else 0f
+                    alpha = 1f - f; scaleX = 1f - 0.35f * f; scaleY = 1f - 0.35f * f
+                }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BigButton(recording != null, recording?.paused == true, level, 120.dp, buttonModifier) {
+                        val r = recording
+                        if (r == null) onCapture(CaptureRequest(start = true))
+                        else stopAndShow(ctx, r, onCapture)
+                    }
+                    if (recording != null) {
+                        Elapsed(recording, 28.sp)
+                        Text(if (recording.appendLabel != null) "Adding to a note · tap to see it" else "Recording · tap to see it",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else Text("Tap to talk · nothing to decide now", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             item("modes") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Type" to CaptureActivity.MODE_TYPE, "Paste" to CaptureActivity.MODE_PASTE).forEach { (label, m) ->
-                        Surface(onClick = { ctx.startActivity(CaptureActivity.intent(ctx, start = false, mode = m)) },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), color = Ink.Panel,
+                        Surface(onClick = { if (canRecord) onCapture(CaptureRequest(mode = m)) },
+                            shape = RoundedCornerShape(12.dp), color = Ink.Panel,
                             modifier = Modifier.weight(1f).height(48.dp)) {
-                            Box(contentAlignment = Alignment.Center) { Text(label, fontSize = 13.sp, color = Ink.TextSoft) }
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(label, fontSize = 13.sp, color = if (canRecord) Ink.TextSoft else Ink.Bar)
+                            }
                         }
                     }
                 }
@@ -214,20 +260,24 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
             }
             if (pending.isNotEmpty() || cards.isNotEmpty()) item("label") {
                 Text("RECENT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp, top = 4.dp).alpha(listAlpha))
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp))
             }
             items(pending, key = { "p-" + it.id }) { c ->
-                Box(Modifier.animateItem().alpha(listAlpha)) {
+                Box(Modifier.animateItem()) {
                     ProgressCard(c, phase, live, CaptureState.processingId,
                         onRetry = { CaptureService.send(ctx, CaptureService.ACTION_PROCESS_PENDING) })
                 }
             }
             items(cards, key = { it.id }) { c ->
                 val justSaved = saved?.captureId == c.id && now < highlightUntil
-                Box(Modifier.animateItem().alpha(listAlpha)) { NoteCard(c, refresh, justSaved, canRecord) { toggleRecording(it) } }
+                Box(Modifier.animateItem()) {
+                    NoteCard(c, refresh, justSaved, canRecord,
+                        onRecordMore = { onCapture(CaptureRequest(start = true, noteId = it.id)) },
+                        onOpen = { if (it.kind == "voice" || it.kind == "text") onCapture(CaptureRequest(noteId = it.id)) })
+                }
             }
             if (cards.isEmpty() && pending.isEmpty()) item("empty") {
-                Text("Your notes will appear here. Record a thought, or share a link, text or file to Brain Capture from any app.",
+                Text("Your notes will appear here. Talk a thought, type one, or share a link, text or file to Brain from any app.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
             }
@@ -238,6 +288,65 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
                     }
                 }
             }
+        }
+
+        // The small recording bar: slides down from the top once the big button has scrolled away.
+        AnimatedVisibility(barShown, Modifier.align(Alignment.TopCenter),
+            enter = slideInVertically(spring(dampingRatio = 0.8f, stiffness = 380f)) { -it } + fadeIn(),
+            exit = slideOutVertically(tween(180)) { -it } + fadeOut(tween(180))) {
+            recording?.let { r -> RecordingBar(r, level, onOpen = { onCapture(CaptureRequest()) },
+                onStop = { stopAndShow(ctx, r, onCapture) }) }
+        }
+    }
+}
+
+/** Stop means stop: the recording ends at once, then its note opens and fills in as it is processed. */
+private fun stopAndShow(ctx: android.content.Context, r: RecordingInfo, onCapture: (CaptureRequest) -> Unit) {
+    CaptureService.send(ctx, CaptureService.ACTION_STOP)
+    onCapture(CaptureRequest(noteId = r.appendTo ?: r.captureId))
+}
+
+@Composable
+private fun Elapsed(r: RecordingInfo, size: androidx.compose.ui.unit.TextUnit) {
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(r.startedAtMs) { while (true) { tick = System.currentTimeMillis(); delay(250) } }
+    @Suppress("UNUSED_EXPRESSION") tick
+    val s = r.elapsedMs() / 1000
+    Text("%d:%02d".format(s / 60, s % 60), fontFamily = Mono, fontSize = size, color = Ink.Text,
+        modifier = Modifier.semantics { contentDescription = "Recording time ${s / 60} minutes ${s % 60} seconds" })
+}
+
+/** Top bar while recording: pulsing level lines, "Recording" and the time; tap to open, square to stop. */
+@Composable
+private fun RecordingBar(r: RecordingInfo, level: Float, onOpen: () -> Unit, onStop: () -> Unit) {
+    Surface(onClick = onOpen, color = Ink.Raised, shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
+        shadowElevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.statusBarsPadding().padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MiniLevel(level, active = !r.paused)
+            Text(if (r.paused) "Paused" else if (r.appendLabel != null) "Adding to note" else "Recording",
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextStrong, modifier = Modifier.weight(1f))
+            Elapsed(r, 14.sp)
+            Surface(onClick = onStop, shape = CircleShape, color = Ink.Amber,
+                modifier = Modifier.size(44.dp).semantics { contentDescription = "Stop and save" }) {
+                Box(contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(Ink.OnAmber))
+                }
+            }
+        }
+    }
+}
+
+/** Five little lines that pulse with the voice. */
+@Composable
+private fun MiniLevel(level: Float, active: Boolean) {
+    val t = rememberInfiniteTransition(label = "mini")
+    val phase by t.animateFloat(0f, 6.28f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "p")
+    val v by animateFloatAsState(if (active) level else 0f, spring(stiffness = 400f), label = "v")
+    Row(Modifier.height(22.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(5) { i ->
+            val wobble = if (active) (kotlin.math.sin(phase + i * 1.1f) + 1f) / 2f else 0f
+            Box(Modifier.width(3.dp).height((5 + 9 * wobble + 8 * v).dp).clip(RoundedCornerShape(2.dp)).background(Ink.Amber))
         }
     }
 }

@@ -19,7 +19,9 @@ sealed interface Phase {
     data object WritingVault : Phase
     /** [captureId] is the card that changed (for an addition: the note it was added to). */
     data class Saved(val notePath: String, val warning: String? = null, val appended: Boolean = false,
-                     val captureId: String? = null, val atMs: Long = System.currentTimeMillis()) : Phase
+                     val captureId: String? = null,
+    /** The note this recording is added to, if any. */
+    val appendTo: String? = null, val atMs: Long = System.currentTimeMillis()) : Phase
     data class Failed(val message: String, val wavPath: String?) : Phase
 }
 
@@ -28,6 +30,8 @@ data class RecordingInfo(
     val startedAtMs: Long, val file: String, val appendLabel: String? = null, val minutesLeft: Int? = null,
     /** Database id of this capture, so the capture screen can follow it through transcription and cleanup. */
     val captureId: String? = null,
+    /** The note this recording is added to, if any. */
+    val appendTo: String? = null,
     val type: String = "idea",
     /** Set while paused; [pausedTotalMs] is the time spent paused before that. */
     val pausedAtMs: Long? = null,

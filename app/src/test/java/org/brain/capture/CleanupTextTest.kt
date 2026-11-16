@@ -106,7 +106,7 @@ class CleanupTextTest {
 
     @Test fun cardHidesSourcesAndQuote() {
         val body = "- Buy milk [1]\n- [ ] Call mum [2]\n\n> [!quote]- Exactly what I said\n> [1] Uh buy milk.\n> [2] Call mum.\n\n**Added 09:01:00**\n\nMore."
-        assertEquals("- Buy milk\n- [ ] Call mum\n\n**Added 09:01:00**\n\nMore.", CleanupText.forDisplay(body))
+        assertEquals("• Buy milk\n☐ Call mum\n\n**Added 09:01:00**\n\nMore.", CleanupText.forDisplay(body))
     }
 
     @Test fun leavesEditedNoteAlone() =

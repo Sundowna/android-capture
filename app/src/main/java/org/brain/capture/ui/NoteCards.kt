@@ -10,6 +10,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -107,7 +108,7 @@ private fun Meta(text: String, color: Color = MaterialTheme.colorScheme.onSurfac
  * appear here). [justSaved] turns the header green for a few seconds after saving.
  */
 @Composable
-fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit) {
+fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit, onOpen: (Capture) -> Unit = {}) {
     val ctx = LocalContext.current
     val b = brand()
     var view by remember(c.id) { mutableStateOf(Notes.cached(c.id)) }
@@ -153,10 +154,10 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 "file" -> {
                     SharedFiles(c)
                     val caption = text.lines().drop(1).joinToString("\n").trim() // first line is "Shared from …"
-                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true)
+                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, null)
                 }
                 else -> when {
-                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, { editing = true }, view?.fromVault == true)
+                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, { onOpen(c) })
                     view != null -> Text("(no speech recognised)", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(end = 8.dp))
@@ -209,12 +210,17 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
 }
 
 @Composable
-private fun BodyText(text: String, expanded: Boolean, onExpand: (Boolean) -> Unit, onEdit: () -> Unit, editable: Boolean) {
+/** Tap opens the note (to read it whole and talk more into it); long-press edits the text. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun BodyText(text: String, expanded: Boolean, onExpand: (Boolean) -> Unit, onEdit: () -> Unit, editable: Boolean, onOpen: (() -> Unit)?) {
     var overflows by remember(text) { mutableStateOf(false) }
     SelectionContainer {
         Text(text, style = MaterialTheme.typography.bodyLarge, maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
-            modifier = Modifier.padding(end = 8.dp).clickable(enabled = editable, onClickLabel = "Edit note", onClick = onEdit))
+            modifier = Modifier.padding(end = 8.dp).then(
+                if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open note", onClick = onOpen,
+                    onLongClickLabel = "Edit note", onLongClick = if (editable) onEdit else null)
+                else Modifier.clickable(enabled = editable, onClickLabel = "Edit note", onClick = onEdit)))
     }
     if (overflows || expanded) TextButton(onClick = { onExpand(!expanded) }, contentPadding = PaddingValues(0.dp)) {
         Text(if (expanded) "Show less" else "Show all", fontWeight = FontWeight.SemiBold)

@@ -50,13 +50,23 @@ object CleanupStep {
 
         cleaning.value = c.id
         val t0 = SystemClock.elapsedRealtime()
-        val answer = try {
-            GemmaHolder.generate(ctx, CleanupText.prompt(segments, owner.type, today))
+        val prompt = CleanupText.prompt(segments, owner.type, today)
+        var result: CleanupText.Result
+        try {
+            var answer = GemmaHolder.generate(ctx, prompt)
+            Log.i(TAG, "Gemma answered for ${segments.size} segments:\n$answer")
+            result = CleanupText.check(answer, segments.size)
+            if (result is CleanupText.Result.Rejected) {
+                // One more try with the rule spelled out; a second miss keeps the exact words.
+                Log.i(TAG, "Retrying after: ${result.reason}")
+                answer = GemmaHolder.generate(ctx, prompt + "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3].")
+                Log.i(TAG, "Second answer:\n$answer")
+                result = CleanupText.check(answer, segments.size)
+            }
         } finally { cleaning.value = null }
         val ms = SystemClock.elapsedRealtime() - t0
-        Log.i(TAG, "Gemma answered in $ms ms for ${segments.size} segments:\n$answer")
 
-        val ok = when (val r = CleanupText.check(answer, segments.size)) {
+        val ok = when (val r = result) {
             is CleanupText.Result.Rejected -> return "rejected: ${r.reason}"
             is CleanupText.Result.Ok -> r
         }

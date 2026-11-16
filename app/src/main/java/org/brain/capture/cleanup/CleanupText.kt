@@ -20,6 +20,7 @@ Then the bullet points only, one per line, each starting with "- "."""
     /** Instruction for tasks: a checklist; [today] lets the model turn "Friday" into a date. */
     fun taskInstruction(today: String) = """Rewrite this voice note as a checklist of tasks.
 Rules: one task per line, short and starting with a verb; remove filler words and repeats.
+Leave out remarks that are not tasks, such as "okay", "task list" or questions to yourself.
 Use only what the speaker said. Add no tasks, facts or opinions.
 Keep the language of the transcript.
 If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
@@ -135,7 +136,13 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
             if (line.startsWith("> [!quote]- Exactly what I said")) { inQuote = true; continue }
             if (inQuote && line.startsWith(">")) continue
             inQuote = false
-            out += if (line.trimStart().startsWith("- ")) line.replace(REFS, "") else line
+            val t = line.trimStart()
+            out += when {
+                t.startsWith("- [ ] ") -> "☐ " + t.removePrefix("- [ ] ").replace(REFS, "")
+                t.startsWith("- [x] ") -> "☑ " + t.removePrefix("- [x] ").replace(REFS, "")
+                t.startsWith("- ") -> "• " + t.removePrefix("- ").replace(REFS, "")
+                else -> line
+            }
         }
         return out.joinToString("\n").replace(Regex("""\n{3,}"""), "\n\n").trim()
     }

@@ -110,7 +110,7 @@ class CaptureService : Service() {
         val started = System.currentTimeMillis()
         val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
         val id = UUID.randomUUID().toString()
-        CaptureState.recording(RecordingInfo(started, file.path, appendLabel, minutesLeft, captureId = id, type = type))
+        CaptureState.recording(RecordingInfo(started, file.path, appendLabel, minutesLeft, captureId = id, type = type, appendTo = appendTo))
         holdWakeLock()
         goForeground()
         vibrate()

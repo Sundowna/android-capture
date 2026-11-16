@@ -125,6 +125,8 @@ interface CaptureDao {
     @Query("UPDATE captures SET type = :type WHERE id = :id") suspend fun setType(id: String, type: String)
     /** Live view of one capture, for the capture screen. */
     @Query("SELECT * FROM captures WHERE id = :id") fun watch(id: String): Flow<Capture?>
+    /** Live list of the recordings and text added to a note, oldest first. */
+    @Query("SELECT * FROM captures WHERE appendTo = :id AND state != 'discarded' ORDER BY createdAt") fun watchAdditions(id: String): Flow<List<Capture>>
     /** The newest saved capture, for the widget and the quick settings tile. */
     @Query("SELECT * FROM captures WHERE state = 'saved' ORDER BY createdAt DESC LIMIT 1") suspend fun latest(): Capture?
 
