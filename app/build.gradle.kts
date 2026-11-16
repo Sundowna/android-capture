@@ -13,6 +13,9 @@ android {
 
     defaultConfig {
         applicationId = "org.brain.capture"
+        // Playground branch only: installs beside the real app. Drop this commit before merging to main.
+        applicationIdSuffix = ".play"
+        versionNameSuffix = "-play"
         minSdk = 31
         targetSdk = 35
         versionCode = 5
