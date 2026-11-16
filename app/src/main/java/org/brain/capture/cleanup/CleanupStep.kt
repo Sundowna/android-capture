@@ -49,19 +49,21 @@ object CleanupStep {
             is CleanupText.Result.Rejected -> return "rejected: ${r.reason}"
             is CleanupText.Result.Ok -> r.bullets
         }
+        val dao = CaptureDb.get(ctx).dao()
+        // An addition lives in the note it was added to; clean it there.
+        val owner = c.appendTo?.let { dao.get(it) ?: return "skipped: note not found" } ?: c
         val vault = VaultWriter(ctx, Prefs(ctx).vaultUri ?: return "skipped: no vault")
-        val path = Notes.locate(ctx, vault, c) ?: return "skipped: note not found"
+        val path = Notes.locate(ctx, vault, owner) ?: return "skipped: note not found"
         val note = vault.read(path) ?: return "skipped: note not found"
         val block = CleanupText.cleanBlock(bullets, segments)
-        val updated = CleanupText.rewrite(note, transcript, block, GemmaHolder.modelName(ctx))
+        val updated = CleanupText.rewrite(note, transcript, block, GemmaHolder.modelName(ctx), addition = owner !== c)
             ?: return "skipped: note was changed"
 
-        val dao = CaptureDb.get(ctx).dao()
         dao.putEdit(PendingEdit(c.id, path, note, updated)) // backup in case of a crash mid-write
         vault.overwrite(path, updated)
         dao.clearEdit(c.id)
-        Notes.forget(c.id)
-        dao.touch(c.id, System.currentTimeMillis())
+        Notes.forget(owner.id)
+        dao.touch(owner.id, System.currentTimeMillis())
         return "done in $ms ms"
     }
 }

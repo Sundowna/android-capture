@@ -97,15 +97,35 @@ Answer with the bullet points only, one per line, each starting with "- "."""
 
     /**
      * The note with the raw transcript replaced by the clean block, and `cleanup: <model>` added to
-     * the frontmatter. Null when the note no longer holds the transcript as written (edited by the
-     * user meanwhile, or already cleaned): then it is left alone.
+     * the frontmatter if it is not there yet. The transcript must stand exactly once on lines of its
+     * own (as the app wrote it); inside the "Exactly what I said" quote it never does. Null when the
+     * note no longer holds it like that (edited by the user meanwhile, or already cleaned): then the
+     * note is left alone.
+     *
+     * [addition] = the transcript was added to an existing note: the note may already be cleaned.
      */
-    fun rewrite(note: String, transcript: String, block: String, model: String): String? {
+    fun rewrite(note: String, transcript: String, block: String, model: String, addition: Boolean = false): String? {
         val (front, body) = NoteText.split(note)
-        if (front.isEmpty() || front.contains("\ncleanup:")) return null
-        val at = body.indexOf(transcript)
-        if (transcript.isBlank() || at < 0 || body.indexOf(transcript, at + 1) >= 0) return null
-        val newFront = front.removeSuffix("---\n") + "cleanup: $model\n---\n"
+        if (front.isEmpty() || transcript.isBlank()) return null
+        val marked = front.contains("\ncleanup:")
+        if (marked && !addition) return null
+        val hits = lineOccurrences(body, transcript)
+        if (hits.size != 1) return null
+        val at = hits[0]
+        val newFront = if (marked) front else front.removeSuffix("---\n") + "cleanup: $model\n---\n"
         return newFront + body.substring(0, at) + block + body.substring(at + transcript.length)
+    }
+
+    /** Start positions where [text] fills whole lines: at a line start and followed by a line end. */
+    private fun lineOccurrences(body: String, text: String): List<Int> {
+        val out = ArrayList<Int>()
+        var from = 0
+        while (true) {
+            val i = body.indexOf(text, from)
+            if (i < 0) return out
+            val end = i + text.length
+            if ((i == 0 || body[i - 1] == '\n') && (end == body.length || body[end] == '\n')) out += i
+            from = i + 1
+        }
     }
 }

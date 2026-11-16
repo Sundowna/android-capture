@@ -66,6 +66,26 @@ class CleanupTextTest {
         assertNull(CleanupText.rewrite(out, "Uh buy milk. And, uh, call mum.", block, "gemma-4-E2B-it"))
     }
 
+    @Test fun cleansAdditionInCleanedNote() {
+        val main = "Uh buy milk. And, uh, call mum."
+        val cleaned = CleanupText.rewrite(note, main,
+            CleanupText.cleanBlock(listOf(Bullet("Buy milk", listOf(1)), Bullet("Call mum", listOf(2))), CleanupText.segments(main)), "g")!!
+        val added = "Also, um, one coffee."
+        val withAddition = cleaned + NoteBuilder.appendBlock(OffsetDateTime.of(2026, 11, 16, 9, 1, 0, 0, ZoneOffset.UTC), added, "b.ogg", null)
+        val block = CleanupText.cleanBlock(listOf(Bullet("One coffee", listOf(1))), CleanupText.segments(added))
+        // Without the addition flag an already cleaned note is left alone.
+        assertNull(CleanupText.rewrite(withAddition, added, block, "g"))
+        val out = CleanupText.rewrite(withAddition, added, block, "g", addition = true)!!
+        assertTrue(out.contains("**Added 09:01:00**\n\n- One coffee [1]\n\n> [!quote]- Exactly what I said\n> [1] Also, um, one coffee.\n\n![[b.ogg]]"))
+        assertEquals(1, Regex("(?m)^cleanup:").findAll(out).count())
+        assertTrue(out.contains("- Buy milk [1]\n- Call mum [2]"))
+        // The exact words now sit only inside the quote, so a second run changes nothing.
+        assertNull(CleanupText.rewrite(out, added, block, "g", addition = true))
+    }
+
+    @Test fun additionNeedsWholeLine() =
+        assertNull(CleanupText.rewrite(note, "buy milk.", "x", "m", addition = true))
+
     @Test fun leavesEditedNoteAlone() =
         assertNull(CleanupText.rewrite(note.replace("call mum", "call Mum"), "Uh buy milk. And, uh, call mum.", "x", "m"))
 }

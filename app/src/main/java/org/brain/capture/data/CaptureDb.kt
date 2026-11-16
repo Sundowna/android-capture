@@ -102,9 +102,10 @@ interface CaptureDao {
     @Query("UPDATE captures SET lastActivityAt = :at WHERE id = :id") suspend fun touch(id: String, at: Long)
     @Query("UPDATE captures SET notePath = :path WHERE id = :id") suspend fun moveNote(id: String, path: String)
 
-    /** Recent own voice notes that have not been through the cleanup step yet. */
-    @Query("""SELECT * FROM captures WHERE kind = 'voice' AND state = 'saved' AND appendTo IS NULL
-              AND notePath IS NOT NULL AND cleanup IS NULL AND createdAt >= :since ORDER BY createdAt""")
+    /** Recent voice notes and additions to notes that have not been through the cleanup step yet. */
+    @Query("""SELECT * FROM captures WHERE kind = 'voice' AND state = 'saved' AND cleanup IS NULL
+              AND ((appendTo IS NULL AND notePath IS NOT NULL) OR (appendTo IS NOT NULL AND appended = 1))
+              AND createdAt >= :since ORDER BY createdAt""")
     suspend fun pendingCleanup(since: Long): List<Capture>
     @Query("UPDATE captures SET cleanup = :result WHERE id = :id") suspend fun setCleanup(id: String, result: String)
 
