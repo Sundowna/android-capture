@@ -247,9 +247,16 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             TopBar(private, locked = recording?.appendTo != null,
-                onPrivate = { p -> if (note?.state == CaptureStates.SAVED && p != private) newNote(); private = p }, onClose = onClose)
+                onPrivate = { p -> if ((note?.state == CaptureStates.SAVED || undone) && p != private) newNote(); private = p }, onClose = onClose)
 
-            if (mode == CaptureActivity.MODE_VOICE) {
+            // A typed or pasted note has no audio and no clean version: no voice tabs for it.
+            val typedNote = note != null && note?.kind != "voice" && additions.none { it.kind == "voice" } && !recordingHere && !undone
+            if (mode == CaptureActivity.MODE_VOICE && typedNote) {
+                Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (note?.kind == "link") "Saved link" else "Typed note", fontFamily = Grotesk,
+                        fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text)
+                }
+            } else if (mode == CaptureActivity.MODE_VOICE) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
                     ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
@@ -487,8 +494,11 @@ private fun Footer(c: Capture?, view: View, recording: Boolean) {
     val ctx = LocalContext.current
     if (c == null || recording || c.state != CaptureStates.SAVED) return
     Spacer(Modifier.height(4.dp))
-    Text(if (view == View.Clean) "Your words, reordered. Nothing added. Tap a line to see what you said."
-        else "Raw transcript is always kept with the audio.", fontSize = 12.sp, color = Ink.TextDim)
+    Text(when {
+        c.kind != "voice" -> "Your words, as you typed them."
+        view == View.Clean -> "Your words, reordered. Nothing added. Tap a line to see what you said."
+        else -> "Raw transcript is always kept with the audio."
+    }, fontSize = 12.sp, color = Ink.TextDim)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = !c.isPrivate && c.notePath != null) {
             c.notePath?.let { openInObsidian(ctx, it) }
@@ -526,10 +536,12 @@ private fun Controls(
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(recordingHere) { while (recordingHere) { tick = System.currentTimeMillis(); delay(250) } }
     @Suppress("UNUSED_EXPRESSION") tick
-    val s = elapsedMs() / 1000
+    val ms = elapsedMs()
+    val s = ms / 1000
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Column(Modifier.width(76.dp)) {
-            Text("%d:%02d".format(s / 60, s % 60), fontFamily = Mono, fontSize = 14.sp, color = Ink.TextSoft,
+            // Only a time that means something: the running recording, or the length of the last one.
+            if (recordingHere || ms > 0) Text("%d:%02d".format(s / 60, s % 60), fontFamily = Mono, fontSize = 14.sp, color = Ink.TextSoft,
                 modifier = Modifier.semantics { contentDescription = "${s / 60} minutes ${s % 60} seconds" })
             if (recordingHere) Text("Discard", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Error,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onDiscard).padding(vertical = 10.dp))
