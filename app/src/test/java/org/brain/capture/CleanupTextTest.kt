@@ -86,6 +86,29 @@ class CleanupTextTest {
     @Test fun additionNeedsWholeLine() =
         assertNull(CleanupText.rewrite(note, "buy milk.", "x", "m", addition = true))
 
+    @Test fun readsTitleAndTasks() {
+        val r = CleanupText.check("Title: Errands for Friday\n- [ ] Call the dentist (due 2026-11-20) [1]\n- [ ] Buy milk [2]", 2)
+        assertEquals(Result.Ok(listOf(
+            Bullet("Call the dentist (due 2026-11-20)", listOf(1), task = true), Bullet("Buy milk", listOf(2), task = true),
+        ), "Errands for Friday"), r)
+        val stored = CleanupText.stored("Errands for Friday", (r as Result.Ok).bullets)
+        assertEquals("# Errands for Friday\n- [ ] Call the dentist (due 2026-11-20) [1]\n- [ ] Buy milk [2]", stored)
+        val lines = CleanupText.parseStored(stored)
+        assertTrue(lines[0].title)
+        assertEquals(CleanupText.Line("Buy milk", listOf(2), task = true), lines[2])
+    }
+
+    @Test fun boldTitleAccepted() =
+        assertEquals("Ideas", (CleanupText.check("**Title:** Ideas\n- One [1]", 1) as Result.Ok).title)
+
+    @Test fun taskPromptHasToday() =
+        assertTrue(CleanupText.prompt(listOf("x"), "task", "2026-11-16").contains("Today is 2026-11-16."))
+
+    @Test fun cardHidesSourcesAndQuote() {
+        val body = "- Buy milk [1]\n- [ ] Call mum [2]\n\n> [!quote]- Exactly what I said\n> [1] Uh buy milk.\n> [2] Call mum.\n\n**Added 09:01:00**\n\nMore."
+        assertEquals("- Buy milk\n- [ ] Call mum\n\n**Added 09:01:00**\n\nMore.", CleanupText.forDisplay(body))
+    }
+
     @Test fun leavesEditedNoteAlone() =
         assertNull(CleanupText.rewrite(note.replace("call mum", "call Mum"), "Uh buy milk. And, uh, call mum.", "x", "m"))
 }

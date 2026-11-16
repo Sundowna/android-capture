@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -173,7 +174,7 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
         ) {
             item("top") {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Brain Capture", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text("Brain", fontFamily = Grotesk, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     if (recording == null) IconButton(onClick = onSettings) {
                         Icon(painterResource(R.drawable.ic_tune), "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
@@ -184,9 +185,21 @@ private fun HomeScreen(retryRequest: MutableState<Boolean>, onSettings: () -> Un
             }
             item("hero") {
                 RecordHero(recording, level, enabled = true,
-                    idleHint = if (pending.isNotEmpty()) "Tap to capture another thought" else "Tap to capture a thought",
+                    idleHint = "Tap to talk · nothing to decide now",
                     onDiscard = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL) },
-                    onClick = { toggleRecording() })
+                    // The capture screen is where talking happens; it starts at once.
+                    onClick = { ctx.startActivity(CaptureActivity.intent(ctx, start = recording == null)) })
+            }
+            item("modes") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Type" to CaptureActivity.MODE_TYPE, "Paste" to CaptureActivity.MODE_PASTE).forEach { (label, m) ->
+                        Surface(onClick = { ctx.startActivity(CaptureActivity.intent(ctx, start = false, mode = m)) },
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), color = Ink.Panel,
+                            modifier = Modifier.weight(1f).height(48.dp)) {
+                            Box(contentAlignment = Alignment.Center) { Text(label, fontSize = 13.sp, color = Ink.TextSoft) }
+                        }
+                    }
+                }
             }
             // A general problem that is not tied to a recording (e.g. microphone or storage).
             val failed = phase as? Phase.Failed

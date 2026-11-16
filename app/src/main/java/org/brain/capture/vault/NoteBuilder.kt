@@ -25,10 +25,12 @@ object NoteBuilder {
         model: String,
         language: String,
         warning: String? = null,
+        type: String = "idea",
     ): String = buildString {
         appendLine("---")
         appendLine("type: capture")
         appendLine("source: voice")
+        if (type != "idea") appendLine("capture_type: $type")
         appendLine("captured: ${at.truncatedTo(java.time.temporal.ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)}")
         appendLine("duration: ${formatDuration(durationSec)}")
         appendLine("audio: \"[[${audioFile}]]\"")

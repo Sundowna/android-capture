@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.brain.capture.Prefs
+import org.brain.capture.cleanup.CleanupText
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.data.CaptureStates
@@ -47,12 +48,17 @@ object Notes {
 
     /** Loads the live note text for a card. Falls back to the app's copy if the vault can't be read. */
     suspend fun load(ctx: Context, c: Capture): NoteView = withContext(Dispatchers.IO) {
+        if (c.isPrivate) {
+            // Private captures live in the app only; show the clean version when there is one.
+            val text = c.clean?.let(CleanupText::storedForDisplay) ?: c.transcript.orEmpty()
+            return@withContext NoteView(text, fromVault = false).also { cache[c.id] = it }
+        }
         val view = runCatching {
             val vault = vault(ctx)
             val path = locate(ctx, vault, c)
             val text = path?.let { vault.read(it) }
             if (text == null) NoteView(c.transcript.orEmpty(), fromVault = false, missing = true)
-            else NoteView(NoteText.display(text), fromVault = true)
+            else NoteView(CleanupText.forDisplay(NoteText.display(text)), fromVault = true)
         }.getOrElse { NoteView(c.transcript.orEmpty(), fromVault = false) }
         cache[c.id] = view
         view
@@ -175,8 +181,16 @@ object Notes {
      * are left alone, since other notes may use them.
      */
     suspend fun delete(ctx: Context, c: Capture) = withContext(Dispatchers.IO) {
-        val vault = vault(ctx)
         val dao = CaptureDb.get(ctx).dao()
+        if (c.isPrivate) {
+            // Nothing in the vault: delete the app's own audio and forget the capture.
+            (listOf(c) + dao.additions(c.id)).forEach { a -> a.audioVaultName?.let { File(ctx.filesDir, it).delete() } }
+            dao.deleteWithAdditions(c.id)
+            cache.remove(c.id)
+            Log.i(TAG, "Deleted private capture ${c.id}")
+            return@withContext
+        }
+        val vault = vault(ctx)
         val path = locate(ctx, vault, c)
         val own = buildList {
             c.audioVaultName?.let(::add)

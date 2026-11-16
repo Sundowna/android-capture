@@ -8,13 +8,24 @@ import org.brain.capture.vault.NoteText
  * writing the clean version into the note.
  */
 object CleanupText {
-    /** Fixed instruction; the numbered transcript follows it. */
+    /** Fixed instruction for ideas (and private notes); the numbered transcript follows it. */
     const val INSTRUCTION = """Rewrite this voice note as clean bullet points.
 Rules: remove filler words and repeats, fix grammar, put related points together.
 Use only what the speaker said. Add no facts, opinions or conclusions.
 Keep the language of the transcript.
 After each bullet, give the transcript segment numbers it came from, e.g. [2,3].
-Answer with the bullet points only, one per line, each starting with "- "."""
+First line: "Title: " and a short title of at most 8 words, in the language of the transcript.
+Then the bullet points only, one per line, each starting with "- "."""
+
+    /** Instruction for tasks: a checklist; [today] lets the model turn "Friday" into a date. */
+    fun taskInstruction(today: String) = """Rewrite this voice note as a checklist of tasks.
+Rules: one task per line, short and starting with a verb; remove filler words and repeats.
+Use only what the speaker said. Add no tasks, facts or opinions.
+Keep the language of the transcript.
+If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
+After each task, give the transcript segment numbers it came from, e.g. [2,3].
+First line: "Title: " and a short title of at most 8 words, in the language of the transcript.
+Then the tasks only, one per line, each starting with "- [ ] "."""
 
     private val SENTENCE_END = Regex("""(?<=[.!?…])\s+""")
     private const val MAX_SEGMENT = 280
@@ -38,44 +49,53 @@ Answer with the bullet points only, one per line, each starting with "- "."""
         return out
     }
 
-    fun prompt(segments: List<String>): String = buildString {
-        appendLine(INSTRUCTION)
+    /** [type] is the capture type ("task" gets a checklist); [today] is ISO yyyy-MM-dd. */
+    fun prompt(segments: List<String>, type: String = "idea", today: String = ""): String = buildString {
+        appendLine(if (type == "task") taskInstruction(today) else INSTRUCTION)
         appendLine()
         appendLine("Transcript:")
         segments.forEachIndexed { i, s -> appendLine("[${i + 1}] $s") }
     }
 
-    data class Bullet(val text: String, val refs: List<Int>)
+    data class Bullet(val text: String, val refs: List<Int>, val task: Boolean = false)
 
     sealed interface Result {
-        data class Ok(val bullets: List<Bullet>) : Result
+        data class Ok(val bullets: List<Bullet>, val title: String? = null) : Result
         data class Rejected(val reason: String) : Result
     }
 
     private val BULLET = Regex("""^\s*(?:[-*•]|\d+[.)])\s+(.*)$""")
+    private val TASK = Regex("""^\[[ xX]?]\s+(.*)$""")
+    private val TITLE = Regex("""^(?:#+\s*)?\**(?:title|titel)\**\s*:\s*\**(.+?)\**$""", RegexOption.IGNORE_CASE)
     private val REFS = Regex("""\s*\[\s*(\d+(?:\s*[,–-]\s*\d+)*)\s*]\s*[.]?\s*$""")
 
     /**
-     * Reads the model's bullets. Every bullet must end with segment numbers that exist; otherwise
-     * the whole answer is rejected and the note keeps the raw transcript only.
+     * Reads the model's answer: an optional "Title:" first line (no sources needed, it only
+     * names the note), then bullets or "- [ ]" tasks. Every bullet must end with segment numbers
+     * that exist; otherwise the whole answer is rejected and the note keeps the raw transcript only.
      */
     fun check(answer: String, segmentCount: Int): Result {
-        val lines = answer.replace("\r\n", "\n").lines().map { it.trim() }
+        var lines = answer.replace("\r\n", "\n").lines().map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("```") }
         if (lines.isEmpty()) return Result.Rejected("empty answer")
+        val title = TITLE.find(lines[0])?.groupValues?.get(1)?.trim()?.trim('"')?.take(80)?.ifEmpty { null }
+        if (title != null) lines = lines.drop(1)
+        if (lines.isEmpty()) return Result.Rejected("title only")
         val bullets = ArrayList<Bullet>()
         for (line in lines) {
-            val body = BULLET.find(line)?.groupValues?.get(1)
+            var body = BULLET.find(line)?.groupValues?.get(1)
                 ?: return Result.Rejected("not a bullet: \"${line.take(60)}\"")
+            val task = TASK.find(body)?.groupValues?.get(1)
+            if (task != null) body = task
             val m = REFS.find(body) ?: return Result.Rejected("bullet without segment numbers: \"${body.take(60)}\"")
             val refs = parseRefs(m.groupValues[1])
             if (refs.isEmpty() || refs.any { it !in 1..segmentCount })
                 return Result.Rejected("segment number out of range in \"${body.take(60)}\"")
             val text = body.substring(0, m.range.first).trim()
             if (text.isEmpty()) return Result.Rejected("bullet with numbers only")
-            bullets += Bullet(text, refs)
+            bullets += Bullet(text, refs, task = task != null)
         }
-        return Result.Ok(bullets)
+        return Result.Ok(bullets, title)
     }
 
     private fun parseRefs(s: String): List<Int> = s.split(',').flatMap { part ->
@@ -89,11 +109,57 @@ Answer with the bullet points only, one per line, each starting with "- "."""
 
     /** Clean bullets with their sources, then the exact words in a collapsed quote. */
     fun cleanBlock(bullets: List<Bullet>, segments: List<String>): String = buildString {
-        for (b in bullets) appendLine("- ${b.text} [${b.refs.joinToString(",")}]")
+        append(bulletLines(bullets))
+        appendLine()
         appendLine()
         appendLine("> [!quote]- Exactly what I said")
         segments.forEachIndexed { i, s -> appendLine("> [${i + 1}] $s") }
     }.trimEnd()
+
+    /** The bullets alone, one per line, each ending with its sources: "- text [1,2]" or "- [ ] text [3]". */
+    fun bulletLines(bullets: List<Bullet>): String =
+        bullets.joinToString("\n") { "- ${if (it.task) "[ ] " else ""}${it.text} [${it.refs.joinToString(",")}]" }
+
+    /** What the app keeps for the capture screen and cards: "# Title" (if any), then the bullets. */
+    fun stored(title: String?, bullets: List<Bullet>): String =
+        (title?.let { "# $it\n" } ?: "") + bulletLines(bullets)
+
+    /**
+     * Note text for a card: the "Exactly what I said" quotes are folded away and the segment
+     * numbers after bullets are hidden. The note itself keeps both.
+     */
+    fun forDisplay(body: String): String {
+        val out = ArrayList<String>()
+        var inQuote = false
+        for (line in body.lines()) {
+            if (line.startsWith("> [!quote]- Exactly what I said")) { inQuote = true; continue }
+            if (inQuote && line.startsWith(">")) continue
+            inQuote = false
+            out += if (line.trimStart().startsWith("- ")) line.replace(REFS, "") else line
+        }
+        return out.joinToString("\n").replace(Regex("""\n{3,}"""), "\n\n").trim()
+    }
+
+    /** [stored] text as plain lines for a card: the title, then "• " bullets or "☐ " tasks. */
+    fun storedForDisplay(s: String): String = parseStored(s).joinToString("\n") {
+        when { it.title -> it.text; it.task -> "☐ ${it.text}"; else -> "• ${it.text}" }
+    }
+
+    /** A line of [stored] text, ready to show: its sources, and whether it is a title or task. */
+    data class Line(val text: String, val refs: List<Int>, val title: Boolean = false, val task: Boolean = false)
+
+    fun parseStored(s: String): List<Line> = s.lines().filter { it.isNotBlank() }.map { l ->
+        when {
+            l.startsWith("# ") -> Line(l.removePrefix("# ").trim(), emptyList(), title = true)
+            else -> {
+                var body = l.removePrefix("- ")
+                val task = body.startsWith("[ ] ").also { if (it) body = body.removePrefix("[ ] ") }
+                val m = REFS.find(body)
+                Line(if (m != null) body.substring(0, m.range.first).trim() else body.trim(),
+                    m?.let { parseRefs(it.groupValues[1]) } ?: emptyList(), task = task)
+            }
+        }
+    }
 
     /**
      * The note with the raw transcript replaced by the clean block, and `cleanup: <model>` added to

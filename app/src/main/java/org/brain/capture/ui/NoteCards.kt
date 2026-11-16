@@ -83,10 +83,11 @@ private fun duration(sec: Double): String { val s = sec.toLong(); return "%d:%02
 
 /** The coloured square at the start of a card, telling at a glance what kind of capture it is. */
 @Composable
-private fun KindTile(kind: String, saved: Boolean) {
+private fun KindTile(kind: String, saved: Boolean, private: Boolean = false) {
     val b = brand()
     val (bg, fg, icon) = when {
         saved -> Triple(b.successBg, b.success, R.drawable.ic_check)
+        private -> Triple(Ink.Raised, Ink.TextStrong, R.drawable.ic_lock)
         kind == "link" -> Triple(b.linkBg, b.link, R.drawable.ic_link)
         kind == "text" -> Triple(b.voiceBg, b.voice, R.drawable.ic_text)
         kind == "file" -> Triple(b.fileBg, b.file, R.drawable.ic_doc)
@@ -130,14 +131,19 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
             // Header: kind + where/when, or the fresh "saved" confirmation.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(end = 8.dp)) {
-                KindTile(c.kind, justSaved)
-                if (justSaved) Meta("Saved to $folder · just now", b.success)
-                else Meta(when (c.kind) {
+                KindTile(c.kind, justSaved, c.isPrivate)
+                if (justSaved) Meta(if (c.isPrivate) "Kept on this phone · just now" else "Saved to $folder · just now", b.success)
+                else Meta(when {
+                    c.isPrivate -> "Private · on this phone · ${relativeTime(c.lastActivityAt)}" +
+                        (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
+                    c.type == "task" -> "Task · ${relativeTime(c.lastActivityAt)}" +
+                        (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
+                    else -> when (c.kind) {
                     "voice" -> "Voice · ${relativeTime(c.lastActivityAt)} · ${duration(c.audioSeconds)}"
                     "link" -> "Link${source?.let { " from $it" } ?: ""} · ${relativeTime(c.createdAt)}"
                     "text" -> "Text${source?.let { " from $it" } ?: ""} · ${relativeTime(c.createdAt)}"
                     else -> fileMeta(ctx, c, source)
-                })
+                }})
             }
 
             if (view?.missing == true) Text("This note is no longer in the vault. Showing the app's copy.",
@@ -164,13 +170,15 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 // Delete sits apart on the left, away from the everyday actions.
                 CardAction(painterResource(R.drawable.ic_delete), "Delete note") { deleting = true }
                 Box(Modifier.weight(1f))
-                CardAction(painterResource(R.drawable.ic_pencil), "Open in Obsidian") {
+                if (!c.isPrivate) CardAction(painterResource(R.drawable.ic_pencil), "Open in Obsidian") {
                     val path = c.notePath
                     if (path == null || !openInObsidian(ctx, path))
                         Toast.makeText(ctx, "Could not open Obsidian. Is it installed?", Toast.LENGTH_SHORT).show()
                 }
-                CardAction(painterResource(R.drawable.ic_text_add), "Add typed text") { typing = true }
-                CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
+                if (!c.isPrivate) {
+                    CardAction(painterResource(R.drawable.ic_text_add), "Add typed text") { typing = true }
+                    CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
+                }
                 ShareAction(c)
                 CopyAction(text.ifBlank { null })
             }
@@ -184,7 +192,8 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
         AlertDialog(
             onDismissRequest = { deleting = false },
             title = { Text("Delete this note?") },
-            text = { Text("The note${attached?.let { " and $it" } ?: ""} ${if (attached == null) "moves" else "move"} to the .trash folder in your vault, " +
+            text = { Text(if (c.isPrivate) "This private note${if (c.kind == "voice") " and its recording" else ""} will be deleted from this phone. It was never in your vault, so it can't be restored."
+                else "The note${attached?.let { " and $it" } ?: ""} ${if (attached == null) "moves" else "move"} to the .trash folder in your vault, " +
                 "where you can still restore them. Your sync tool will remove it on your other devices too.") },
             confirmButton = { TextButton(onClick = {
                 deleting = false

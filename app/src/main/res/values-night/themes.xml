@@ -1,5 +1,5 @@
 <resources>
     <style name="Theme.Capture" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">#FF3A3E44</item>
     </style>
 </resources>

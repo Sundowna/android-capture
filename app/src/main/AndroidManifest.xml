@@ -38,6 +38,42 @@
             </intent-filter>
         </activity>
 
+        <!-- Screen 5: the capture screen. Opened by the widget, the quick settings tile and the app. -->
+        <activity
+            android:name=".ui.CaptureActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.capture"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Capture" />
+
+        <!-- Screen 8: home-screen widget with one button per capture type. -->
+        <receiver
+            android:name=".ui.BrainWidget"
+            android:exported="false"
+            android:label="Brain">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_brain_info" />
+        </receiver>
+
+        <!-- Quick settings tile: talk from anywhere, the lock screen included. -->
+        <service
+            android:name=".ui.BrainTile"
+            android:exported="true"
+            android:icon="@drawable/ic_mic"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="false" />
+        </service>
+
         <!-- Second home-screen icon: one tap starts recording, the next tap stops it. -->
         <activity
             android:name=".ui.QuickRecordActivity"

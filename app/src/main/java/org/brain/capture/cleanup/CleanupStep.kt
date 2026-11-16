@@ -21,6 +21,9 @@ object CleanupStep {
     private const val TAG = "Cleanup"
     private const val DAY = 24 * 60 * 60 * 1000L
 
+    /** Id of the capture Gemma is cleaning right now, for the "Cleaning…" state on screen. */
+    val cleaning = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
     /** Cleans every recent voice note that has not been tried yet. */
     suspend fun runPending(ctx: Context) = withContext(Dispatchers.IO) {
         if (GemmaHolder.modelFile(ctx) == null) return@withContext
@@ -40,18 +43,30 @@ object CleanupStep {
         if (transcript.isEmpty()) return "skipped: no speech"
         val segments = CleanupText.segments(transcript)
 
+        val dao = CaptureDb.get(ctx).dao()
+        // An addition lives in the note it was added to; clean it there, as that note's type.
+        val owner = c.appendTo?.let { dao.get(it) ?: return "skipped: note not found" } ?: c
+        val today = java.time.LocalDate.now().toString()
+
+        cleaning.value = c.id
         val t0 = SystemClock.elapsedRealtime()
-        val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segments))
+        val answer = try {
+            GemmaHolder.generate(ctx, CleanupText.prompt(segments, owner.type, today))
+        } finally { cleaning.value = null }
         val ms = SystemClock.elapsedRealtime() - t0
         Log.i(TAG, "Gemma answered in $ms ms for ${segments.size} segments:\n$answer")
 
-        val bullets = when (val r = CleanupText.check(answer, segments.size)) {
+        val ok = when (val r = CleanupText.check(answer, segments.size)) {
             is CleanupText.Result.Rejected -> return "rejected: ${r.reason}"
-            is CleanupText.Result.Ok -> r.bullets
+            is CleanupText.Result.Ok -> r
         }
-        val dao = CaptureDb.get(ctx).dao()
-        // An addition lives in the note it was added to; clean it there.
-        val owner = c.appendTo?.let { dao.get(it) ?: return "skipped: note not found" } ?: c
+        val bullets = ok.bullets
+        // The app's own copy first: the capture screen and the card show it at once.
+        dao.setClean(c.id, CleanupText.stored(ok.title, bullets))
+        if (owner.isPrivate) {
+            dao.touch(owner.id, System.currentTimeMillis())
+            return "done in $ms ms (private, app only)"
+        }
         val vault = VaultWriter(ctx, Prefs(ctx).vaultUri ?: return "skipped: no vault")
         val path = Notes.locate(ctx, vault, owner) ?: return "skipped: note not found"
         val note = vault.read(path) ?: return "skipped: note not found"

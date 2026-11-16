@@ -34,6 +34,7 @@ import org.brain.capture.RecordingInfo
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.data.CaptureStates
+import org.brain.capture.data.CaptureTypes
 import org.brain.capture.pipeline.VoicePipeline
 import org.brain.capture.ui.MainActivity
 import java.io.File
@@ -53,6 +54,7 @@ class CaptureService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var stopRequested = false
     @Volatile private var cancelRequested = false
+    @Volatile private var pauseRequested = false
     private val procLock = Any()
     private var processingActive = false
 
@@ -71,7 +73,10 @@ class CaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO), intent.getStringExtra(EXTRA_APPEND_LABEL))
+            ACTION_START -> startRecording(intent.getStringExtra(EXTRA_APPEND_TO), intent.getStringExtra(EXTRA_APPEND_LABEL),
+                intent.getStringExtra(EXTRA_TYPE) ?: CaptureTypes.IDEA)
+            ACTION_PAUSE -> setPaused(true)
+            ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> if (CaptureState.isRecording) stopRequested = true else maybeFinish()
             ACTION_CANCEL -> if (CaptureState.isRecording) { cancelRequested = true; stopRequested = true } else maybeFinish()
             ACTION_TOGGLE -> if (CaptureState.isRecording) stopRequested = true else startRecording()
@@ -89,7 +94,7 @@ class CaptureService : Service() {
 
     @SuppressLint("MissingPermission")
     /** [appendTo] is the capture id of the note to add to; [appendLabel] its path, for display. */
-    private fun startRecording(appendTo: String? = null, appendLabel: String? = null) {
+    private fun startRecording(appendTo: String? = null, appendLabel: String? = null, type: String = CaptureTypes.IDEA) {
         if (CaptureState.isRecording) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             CaptureState.set(Phase.Failed("Microphone permission missing", null))
@@ -104,7 +109,8 @@ class CaptureService : Service() {
         val minutesLeft = ((free - STOP_BELOW) / BYTES_PER_SECOND / 60).toInt().takeIf { it < 60 }
         val started = System.currentTimeMillis()
         val file = File(stagingDir(this), "${STAMP.format(Date(started))}.wav")
-        CaptureState.recording(RecordingInfo(started, file.path, appendLabel, minutesLeft))
+        val id = UUID.randomUUID().toString()
+        CaptureState.recording(RecordingInfo(started, file.path, appendLabel, minutesLeft, captureId = id, type = type))
         holdWakeLock()
         goForeground()
         vibrate()
@@ -112,13 +118,14 @@ class CaptureService : Service() {
         org.brain.capture.cleanup.GemmaHolder.warm(applicationContext)
         stopRequested = false
         cancelRequested = false
+        pauseRequested = false
 
         scope.launch(Dispatchers.IO) {
             // The row exists from the first second, so an interrupted recording (and its append
             // target) is never forgotten.
             val dao = CaptureDb.get(applicationContext).dao()
-            dao.upsert(Capture(id = UUID.randomUUID().toString(), createdAt = started, state = CaptureStates.RECORDING,
-                stagingPath = file.path, appendTo = appendTo))
+            dao.upsert(Capture(id = id, createdAt = started, state = CaptureStates.RECORDING,
+                stagingPath = file.path, appendTo = appendTo, type = type))
             val ok = runCatching {
                 val storageFull = record(file)
                 dao.byStaging(file.path)?.let { c ->
@@ -168,6 +175,8 @@ class CaptureService : Service() {
                     val n = recorder.read(buf, 0, buf.size)
                     if (n < 0) error("AudioRecord.read returned $n")
                     if (n == 0) continue
+                    // Paused: keep the microphone open (no gap to restart) but write nothing.
+                    if (pauseRequested) { CaptureState.level(0f); continue }
                     wav.write(buf, n)
                     var sum = 0.0
                     for (i in 0 until n) sum += buf[i] * buf[i].toDouble()
@@ -186,6 +195,17 @@ class CaptureService : Service() {
         return storageFull
     }
 
+    /** Pause keeps the recording open; the paused time is left out of the audio and the timer. */
+    private fun setPaused(on: Boolean) {
+        val r = CaptureState.recording.value ?: return
+        if (r.paused == on) return
+        pauseRequested = on
+        val now = System.currentTimeMillis()
+        CaptureState.recording(if (on) r.copy(pausedAtMs = now)
+            else r.copy(pausedAtMs = null, pausedTotalMs = r.pausedTotalMs + (now - (r.pausedAtMs ?: now))))
+        vibrate()
+    }
+
     /** Starts the processing queue unless it is already running. */
     private fun ensureProcessing() {
         synchronized(procLock) { if (processingActive) return; processingActive = true }
@@ -201,6 +221,7 @@ class CaptureService : Service() {
                 }
                 // Raw notes are saved and shown; now the clean versions, in the background.
                 org.brain.capture.cleanup.CleanupStep.runPending(applicationContext)
+                org.brain.capture.ui.BrainWidget.refresh(applicationContext)
             } finally {
                 CaptureState.processing(null, null)
                 synchronized(procLock) { processingActive = false }
@@ -262,10 +283,14 @@ class CaptureService : Service() {
             .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         if (r != null) {
-            return b.setContentTitle(if (r.appendLabel != null) "Recording · adding to note" else "Recording")
+            return b.setContentTitle(when {
+                    r.paused -> "Paused"
+                    r.appendLabel != null -> "Recording · adding to note"
+                    else -> "Recording"
+                })
                 .setContentText(r.minutesLeft?.let { "Storage low: about $it min of recording left" }
                     ?: if (CaptureState.isProcessing) "Earlier recording is being transcribed" else null)
-                .setUsesChronometer(true).setWhen(r.startedAtMs).setShowWhen(true).setOngoing(true)
+                .setUsesChronometer(!r.paused).setWhen(System.currentTimeMillis() - r.elapsedMs()).setShowWhen(!r.paused).setOngoing(true)
                 .addAction(Notification.Action.Builder(null, "Stop", serviceIntent(ACTION_STOP)).build())
                 .addAction(Notification.Action.Builder(null, "Discard", serviceIntent(ACTION_CANCEL)).build())
                 .build()
@@ -326,6 +351,9 @@ class CaptureService : Service() {
         const val ACTION_TOGGLE = "toggle"
         const val ACTION_CANCEL = "cancel"
         const val ACTION_PROCESS_PENDING = "process_pending"
+        const val ACTION_PAUSE = "pause"
+        const val ACTION_RESUME = "resume"
+        const val EXTRA_TYPE = "type"
         const val EXTRA_RETRY = "retry"
         const val EXTRA_APPEND_TO = "append_to"
         const val EXTRA_APPEND_LABEL = "append_label"
@@ -347,7 +375,7 @@ class CaptureService : Service() {
         fun send(ctx: Context, action: String, extra: Intent.() -> Unit = {}) {
             val i = Intent(ctx, CaptureService::class.java).setAction(action).apply(extra)
             // Stop only ever goes to a service that is already in the foreground.
-            if (action == ACTION_STOP || action == ACTION_CANCEL) ctx.startService(i) else ctx.startForegroundService(i)
+            if (action in setOf(ACTION_STOP, ACTION_CANCEL, ACTION_PAUSE, ACTION_RESUME)) ctx.startService(i) else ctx.startForegroundService(i)
         }
     }
 }
