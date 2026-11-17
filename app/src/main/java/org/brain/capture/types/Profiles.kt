@@ -26,6 +26,11 @@ data class CaptureProfile(
     val onWidget: Boolean,
     /** Short paragraphs and bullet lists mixed, as the content needs (not with [checklist]). */
     val mixed: Boolean = false,
+    /**
+     * The built-in instruction this copy started from. While [instruction] still equals it, the user
+     * has not edited it, so an improved built-in text replaces it.
+     */
+    val base: String? = null,
 ) {
     val builtIn: Boolean get() = id in Profiles.BUILT_IN
 }
@@ -93,34 +98,72 @@ Keep names, numbers, dates and examples exactly.
 When the speaker counts things ("one…, two…", "first…, then…"), give each its own bullet without the counting word, starting with what they belong to, e.g. "Trip to Bern: book the train".
 Do not summarise or shorten the content. Add no facts, opinions or conclusions.
 Keep the language of the transcript."""),
-    )
-
-    const val FIX_FEATURE_INSTRUCTION = """This voice note is about an app or a tool: things to fix and features to add.
+        "c-fixfeature" to listOf("""This voice note is about an app or a tool: things to fix and features to add.
 Rewrite it as a checklist. Start each line with "Fix: " for something broken or wrong, or "Feature: " for something new or better.
 Rules: one fix or feature per line; say what to change and where, using the speaker's own names for screens, buttons and apps; keep details such as numbers, names and steps.
 Leave out greetings, thinking aloud and remarks that are not fixes or features.
 Use only what the speaker said. Add no fixes, features or solutions.
-Keep the language of the transcript."""
-
-    const val FIX_INSTRUCTION = """This voice note lists things to fix in an app or a tool.
+Keep the language of the transcript."""),
+        "c-fix" to listOf("""This voice note lists things to fix in an app or a tool.
 Rewrite it as a checklist: one problem per line, saying what goes wrong and where, and what it should do instead if the speaker says so.
 Use the speaker's own names for screens, buttons and apps; keep details such as numbers and steps.
 Leave out greetings, thinking aloud and remarks that are not fixes.
 Use only what the speaker said. Add no causes or solutions.
-Keep the language of the transcript."""
-
-    const val FEATURE_INSTRUCTION = """This voice note lists features to add or change in an app or a tool.
+Keep the language of the transcript."""),
+        "c-feature" to listOf("""This voice note lists features to add or change in an app or a tool.
 Rewrite it as a checklist: one feature per line, starting with a verb, and saying where it goes.
 Use the speaker's own names for screens, buttons and apps; keep details such as numbers, examples and order.
 Leave out greetings, thinking aloud and remarks that are not features.
 Use only what the speaker said. Add no features or details.
+Keep the language of the transcript."""),
+    )
+
+    /*
+     * Fix / Feature types: feedback on an app, written for whoever builds it (a developer or a coding
+     * agent). Each point is one line that can be acted on without the recording: where it happens
+     * (screen, button, how you got there), what happens, what should happen. What already works and
+     * what the speaker asks are kept too — they say what not to change and what to answer.
+     * Tuned on the real feedback notes of 16–17 Nov 2026.
+     */
+    private const val FEEDBACK_RULES = """Where: the screen, button or flow in the speaker's own words, with the steps that lead there.
+One line per point, in the speaker's order: a point spread over several sentences becomes one line, with its segment numbers together, e.g. [3,4,6].
+Write short, plain lines: drop spoken filler inside a point ("you know", "or whatever", "let me just"), but keep every detail exactly: numbers, names, order, and how it should look or feel ("smoother", "softer", "a bit slower").
+In this app "node" is a mishearing of "note", "Whiskr" or "Wispers" of "Whisper", and "keen" of "clean".
+Leave out everything else: filler, greetings, thinking aloud, and remarks that are not a fix, feature, praise or question.
+Use only what the speaker said. Add no fixes, features, causes or solutions.
 Keep the language of the transcript."""
+
+    const val FIX_FEATURE_INSTRUCTION = """This voice note is feedback on an app: what is broken, what to add, what already works, and questions.
+Write each point as one of these lines:
+- Fix: <where> — <what goes wrong>; should <what it should do instead>
+- Feature: <where> — <what to add or change, with every detail given>
+- Works: <only what the speaker praises or confirms works>
+- Question: <what the speaker asks>
+Leave out "; should …" when the speaker does not say what it should do.
+$FEEDBACK_RULES"""
+
+    const val FIX_INSTRUCTION = """This voice note is about things that are broken or wrong in an app.
+Write each point as one of these lines:
+- Fix: <where> — <what goes wrong>; should <what it should do instead>
+- Works: <only what the speaker praises or confirms works>
+- Question: <what the speaker asks>
+Leave out "; should …" when the speaker does not say what it should do.
+$FEEDBACK_RULES"""
+
+    const val FEATURE_INSTRUCTION = """This voice note is about features to add or change in an app.
+Write each point as one of these lines:
+- Feature: <where> — <what to add or change, with every detail given>
+- Works: <only what the speaker praises or confirms works>
+- Question: <what the speaker asks, e.g. whether it is doable>
+Mark a feature the speaker leaves for later with "(later)" at the end.
+$FEEDBACK_RULES"""
 
     /** Types added after the first release: put into existing lists once, after that they are ordinary, deletable types. */
     private val ADDED = listOf(
-        CaptureProfile("c-fixfeature", "Fix / Feature", "sorted into fixes and features", "wrench", FIX_FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
-        CaptureProfile("c-fix", "Fix", "what's broken, where", "bug", FIX_INSTRUCTION, checklist = true, private = false, onWidget = false),
-        CaptureProfile("c-feature", "Feature", "what to add or change", "sparkle", FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
+        // Bullets, not checklist: only Fix and Feature lines get a box; Works and Question lines do not.
+        CaptureProfile("c-fixfeature", "Fix / Feature", "sorted into fixes and features", "wrench", FIX_FEATURE_INSTRUCTION, checklist = false, private = false, onWidget = false),
+        CaptureProfile("c-fix", "Fix", "what's broken, where", "bug", FIX_INSTRUCTION, checklist = false, private = false, onWidget = false),
+        CaptureProfile("c-feature", "Feature", "what to add or change", "sparkle", FEATURE_INSTRUCTION, checklist = false, private = false, onWidget = false),
         CaptureProfile("c-voicenote", "Voice note", "cleaned up, nothing left out", "mic", VOICE_NOTE_INSTRUCTION, checklist = false, private = false, onWidget = false, mixed = true),
     )
     private const val KEY_ADDED = "capture_profiles_added"
@@ -147,9 +190,13 @@ Keep the language of the transcript."""
         val missing = ADDED.filter { it.id !in seen }
         // Untouched built-in instructions follow improvements to their default text.
         val upgraded = list.map { p ->
-            val now = default(p.id)?.instruction
-            if (now != null && p.instruction != now && OLD_INSTRUCTIONS[p.id]?.contains(p.instruction) == true)
-                p.copy(instruction = now, mixed = default(p.id)?.mixed ?: p.mixed) else p
+            val d = default(p.id) ?: return@map p
+            val untouched = p.instruction == p.base || OLD_INSTRUCTIONS[p.id]?.contains(p.instruction) == true
+            when {
+                p.instruction == d.instruction -> if (p.base != d.instruction) p.copy(base = d.instruction) else p
+                untouched -> p.copy(instruction = d.instruction, base = d.instruction, mixed = d.mixed, checklist = d.checklist)
+                else -> p
+            }
         }
         val changed = upgraded != list
         list = upgraded
@@ -223,13 +270,15 @@ Keep the language of the transcript."""
     private fun toJson(p: CaptureProfile) = JSONObject().put("id", p.id).put("name", p.name).put("subtitle", p.subtitle)
         .put("icon", p.icon).put("instruction", p.instruction).put("checklist", p.checklist)
         .put("private", p.private).put("onWidget", p.onWidget).put("mixed", p.mixed)
+        .apply { p.base?.let { put("base", it) } }
 
     private fun parse(raw: String): List<CaptureProfile> {
         val a = JSONArray(raw)
         return (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
             CaptureProfile(o.getString("id"), o.optString("name"), o.optString("subtitle"), o.optString("icon", "star"),
                 o.optString("instruction", IDEA_INSTRUCTION), o.optBoolean("checklist"), o.optBoolean("private"), o.optBoolean("onWidget"),
-                o.optBoolean("mixed", default(o.getString("id"))?.mixed ?: false))
+                o.optBoolean("mixed", default(o.getString("id"))?.mixed ?: false),
+                o.optString("base").ifEmpty { null })
         }
     }
 }

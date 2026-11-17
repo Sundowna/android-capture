@@ -140,7 +140,24 @@ object CleanupStep {
         } finally { cleaning.value = null }
     }
 
-    private suspend fun clean(ctx: Context, c: Capture): String {
+    /**
+     * Cleans one section now, whatever its age: after its exact words were corrected by hand. The
+     * corrected words stand raw in the note (where the clean block was), so the note may already be
+     * marked as cleaned.
+     */
+    suspend fun cleanNow(ctx: Context, id: String) = withContext(Dispatchers.IO) {
+        if (GemmaHolder.modelFile(ctx) == null) return@withContext
+        val dao = CaptureDb.get(ctx).dao()
+        val c = dao.get(id) ?: return@withContext
+        val result = runCatching { clean(ctx, c, again = true) }.getOrElse { t ->
+            Log.e(TAG, "Cleanup failed for ${c.id}", t)
+            "failed: ${t.message ?: t.javaClass.simpleName}"
+        }
+        dao.setCleanup(c.id, result)
+        Log.i(TAG, "${c.id} cleaned again after an edit: $result")
+    }
+
+    private suspend fun clean(ctx: Context, c: Capture, again: Boolean = false): String {
         val transcript = c.transcript?.trim().orEmpty()
         if (transcript.isEmpty()) return "skipped: no speech"
         val segments = CleanupText.segments(transcript)
@@ -186,7 +203,7 @@ object CleanupStep {
         val path = Notes.locate(ctx, vault, owner) ?: return "skipped: note not found"
         val note = vault.read(path) ?: return "skipped: note not found"
         val block = CleanupText.cleanBlock(bullets, segments)
-        val updated = CleanupText.rewrite(note, transcript, block, GemmaHolder.modelName(ctx), addition = owner !== c)
+        val updated = CleanupText.rewrite(note, transcript, block, GemmaHolder.modelName(ctx), addition = owner !== c || again)
             ?: return "skipped: note was changed"
 
         dao.putEdit(PendingEdit(c.id, path, note, updated)) // backup in case of a crash mid-write

@@ -34,6 +34,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -152,6 +153,8 @@ class CaptureActivity : ComponentActivity() {
         const val MODE_VOICE = "voice"
         const val MODE_TYPE = "type"
         const val MODE_PASTE = "paste"
+        /** Editing the note on screen (only from within the note screen, never from outside). */
+        const val MODE_EDIT = "edit"
 
         fun intent(ctx: Context, type: String = CaptureTypes.IDEA, start: Boolean = true, mode: String = MODE_VOICE): Intent =
             Intent(ctx, CaptureActivity::class.java)
@@ -224,6 +227,20 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && it.transcript.isNotBlank())) }
     // Adding to the note on screen: only once it is saved, and not to private notes (they never touch the vault).
     val canAdd = note?.state == CaptureStates.SAVED && note?.isPrivate == false && !undone
+    // Editing the note on screen: once it is finished, and not while recording, transcribing or cleaning.
+    val canEdit = note?.state == CaptureStates.SAVED && !undone && recording == null && !noteBusy &&
+        sections.any { org.brain.capture.pipeline.NoteEdits.wordsEditable(it) }
+    // Which section the cursor starts in, and which version is edited (the view on screen when it began).
+    var editFocus by remember { mutableStateOf<String?>(null) }
+    var editClean by remember { mutableStateOf(false) }
+    fun startEdit(sectionId: String?) {
+        if (!canEdit) return
+        editFocus = sectionId ?: sections.lastOrNull { org.brain.capture.pipeline.NoteEdits.wordsEditable(it) }?.id
+        editClean = view == View.Clean && sections.any { it.clean != null }
+        mode = CaptureActivity.MODE_EDIT
+    }
+    // Back leaves Type, Paste or editing first, back to the note; only then the screen itself.
+    androidx.activity.compose.BackHandler(enabled = mode != CaptureActivity.MODE_VOICE) { mode = CaptureActivity.MODE_VOICE }
 
     fun startVoice(appendTo: Capture?) {
         if (CaptureState.isRecording) return
@@ -337,6 +354,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(when {
+                        mode == CaptureActivity.MODE_EDIT -> if (editClean) "Edit the clean version" else "Correct your exact words"
                         note?.state == CaptureStates.SAVED && !undone -> if (mode == CaptureActivity.MODE_TYPE) "Type to add to this note" else "Paste into this note"
                         mode == CaptureActivity.MODE_TYPE -> "Type a thought"
                         else -> "Paste from clipboard"
@@ -353,7 +371,15 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                         sections = if (undone) emptyList() else sections, view = view, recording = recording,
                         liveText = live, cleaningId = cleaningId, gemmaInstalled = gemmaInstalled,
                         undone = undone, watched = watched, revealed = revealed, onTyped = { typedDone = it },
+                        onEdit = if (canEdit) { id -> startEdit(id) } else null,
                     )
+                    CaptureActivity.MODE_EDIT -> EditCard(sections, editClean, editFocus,
+                        onCancel = { mode = CaptureActivity.MODE_VOICE },
+                        onSaved = { wordsChanged ->
+                            mode = CaptureActivity.MODE_VOICE
+                            // Corrected words are cleaned again: show the clean version coming.
+                            if (wordsChanged && gemmaInstalled) { view = View.Clean; userPickedView = true }
+                        })
                     else -> TextCard(mode, private, type, appendTo = note?.takeIf { it.state == CaptureStates.SAVED && !undone }, onSaved = { c ->
                         noteId = c.appendTo ?: c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
                         if (c.id !in watched) watched += c.id // typed here: Undo can take it back
@@ -428,7 +454,13 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             }
 
             // Type and Paste add to the note on screen; with no finished note open they start a new one.
-            ModeRow(mode, enabled = recording == null) { m -> if (m != mode) { mode = m; if (m != CaptureActivity.MODE_VOICE && note?.state != CaptureStates.SAVED) newNote() } }
+            if (mode != CaptureActivity.MODE_EDIT) ModeRow(mode, enabled = recording == null, canEdit = canEdit) { m ->
+                when {
+                    m == mode -> {}
+                    m == CaptureActivity.MODE_EDIT -> startEdit(null)
+                    else -> { mode = m; if (m != CaptureActivity.MODE_VOICE && note?.state != CaptureStates.SAVED) newNote() }
+                }
+            }
         }
     }
 }
@@ -513,6 +545,7 @@ private fun NoteCardView(
     sections: List<Capture>, view: View, recording: org.brain.capture.RecordingInfo?, liveText: org.brain.capture.LiveText?,
     cleaningId: String?, gemmaInstalled: Boolean, undone: Boolean,
     watched: List<String>, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit,
+    onEdit: ((String) -> Unit)? = null,
 ) {
     val scroll = rememberScrollState()
     // Keep the newest words in sight as they arrive.
@@ -533,10 +566,15 @@ private fun NoteCardView(
         sections.forEachIndexed { i, c ->
             if (i > 0) Text("Added ${TIME.format(Date(c.createdAt))}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                 color = Ink.TextDim, modifier = Modifier.padding(top = 8.dp))
-            Section(c, view, recordingThis = c.id == recordingSection, paused = recording?.paused == true,
-                live = liveText?.takeIf { it.captureId == c.id }?.text, cleaning = cleaningId == c.id,
-                gemmaInstalled = gemmaInstalled, first = i == 0,
-                typing = c.id in watched, revealed = revealed, onTyped = onTyped)
+            // Tapping a finished section's text edits it, in the view on screen.
+            val edit = onEdit?.takeIf { org.brain.capture.pipeline.NoteEdits.wordsEditable(c) && c.transcript != null && cleaningId != c.id }
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                .then(if (edit != null) Modifier.clickable(onClickLabel = "Edit") { edit(c.id) } else Modifier)) {
+                Section(c, view, recordingThis = c.id == recordingSection, paused = recording?.paused == true,
+                    live = liveText?.takeIf { it.captureId == c.id }?.text, cleaning = cleaningId == c.id,
+                    gemmaInstalled = gemmaInstalled, first = i == 0,
+                    typing = c.id in watched, revealed = revealed, onTyped = onTyped, onEdit = edit?.let { e -> { e(c.id) } })
+            }
         }
         // The footer only once everything in the note is done (no half-finished promise).
         val busy = recording != null && sections.any { it.id == recordingSection } ||
@@ -549,7 +587,7 @@ private fun NoteCardView(
 @Composable
 private fun Section(
     c: Capture, view: View, recordingThis: Boolean, paused: Boolean, live: String?, cleaning: Boolean, gemmaInstalled: Boolean, first: Boolean,
-    typing: Boolean, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit,
+    typing: Boolean, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit, onEdit: (() -> Unit)? = null,
 ) {
     val transcript = c.transcript
     when {
@@ -567,7 +605,7 @@ private fun Section(
         c.clean != null || (!transcript.isNullOrBlank() && c.cleanup == null && gemmaInstalled) ->
             androidx.compose.animation.Crossfade(c.clean, animationSpec = tween(600, easing = FastOutSlowInEasing), label = "clean") { clean ->
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (clean != null) CleanView(clean, transcript.orEmpty(), showTitle = first) else Cleaning(cleaning)
+                    if (clean != null) CleanView(clean, transcript.orEmpty(), showTitle = first, onEdit = onEdit) else Cleaning(cleaning)
                 }
             }
         transcript == null -> Hint("Transcribing…", "The clean version follows as soon as Whisper is done.")
@@ -633,9 +671,13 @@ private fun Cleaning(active: Boolean) {
     }
 }
 
-/** Title and bullets. Tap a bullet to see the exact words it came from (every AI line is traceable). */
+/**
+ * Title and lines. Tap a line to edit the clean version; hold it to see the exact words it came from
+ * (every AI line is traceable). Without editing (a note still busy), a tap shows the words.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun CleanView(clean: String, transcript: String, showTitle: Boolean) {
+private fun CleanView(clean: String, transcript: String, showTitle: Boolean, onEdit: (() -> Unit)? = null) {
     val lines = remember(clean) { CleanupText.parseStored(clean) }
     val segments = remember(transcript) { CleanupText.segments(transcript) }
     var open by remember(clean) { mutableStateOf<Int?>(null) }
@@ -643,8 +685,12 @@ private fun CleanView(clean: String, transcript: String, showTitle: Boolean) {
         if (l.title) { if (showTitle) Text(l.text, fontFamily = Grotesk, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, lineHeight = 25.sp, color = Ink.Text) }
         // A paragraph gets a little air above it, so it reads as one apart from a list.
         else Column(Modifier.fillMaxWidth().padding(top = if (l.para && i > 0) 6.dp else 0.dp).clip(RoundedCornerShape(8.dp))
-            .clickable { open = if (open == i) null else i }
-            .semantics { contentDescription = "${l.text}. Tap to show the exact words." }
+            .combinedClickable(
+                onClickLabel = if (onEdit != null) "Edit" else "Show the exact words",
+                onClick = { if (onEdit != null) onEdit() else open = if (open == i) null else i },
+                onLongClickLabel = "Show the exact words",
+                onLongClick = { open = if (open == i) null else i })
+            .semantics { contentDescription = l.text }
             .padding(vertical = 2.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (l.task) Box(Modifier.padding(top = 4.dp).size(16.dp).border(1.5.dp, Ink.TextDim, RoundedCornerShape(4.dp)))
@@ -669,8 +715,8 @@ private fun Footer(c: Capture?, view: View, recording: Boolean) {
         c.kind == "file" -> "The file is saved in your vault's Attachments."
         c.kind == "link" -> "The link and its page title are saved in the note."
         c.kind != "voice" -> "Your words, as you typed them."
-        view == View.Clean -> "Your words, reordered. Nothing added. Tap a line to see what you said."
-        else -> "Raw transcript is always kept with the audio."
+        view == View.Clean -> "Your words, reordered. Nothing added. Tap to edit; hold a line to see what you said."
+        else -> "Raw transcript is always kept with the audio. Tap to correct it."
     }, fontSize = 12.sp, color = Ink.TextDim)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = !c.isPrivate && c.notePath != null) {
@@ -806,9 +852,11 @@ fun BigButton(recording: Boolean, paused: Boolean, level: () -> Float, size: Dp,
 }
 
 @Composable
-private fun ModeRow(mode: String, enabled: Boolean, onMode: (String) -> Unit) {
+private fun ModeRow(mode: String, enabled: Boolean, canEdit: Boolean = false, onMode: (String) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(CaptureActivity.MODE_TYPE to "Type", CaptureActivity.MODE_VOICE to "Voice", CaptureActivity.MODE_PASTE to "Paste").forEach { (m, label) ->
+        // A finished note on screen: Edit changes its text; Type, Voice and Paste add to it.
+        (listOfNotNull(if (canEdit) CaptureActivity.MODE_EDIT to "Edit" else null) +
+            listOf(CaptureActivity.MODE_TYPE to "Type", CaptureActivity.MODE_VOICE to "Voice", CaptureActivity.MODE_PASTE to "Paste")).forEach { (m, label) ->
             val on = m == mode
             val usable = enabled || m == CaptureActivity.MODE_VOICE
             Surface(onClick = { if (usable) onMode(m) },
@@ -817,6 +865,69 @@ private fun ModeRow(mode: String, enabled: Boolean, onMode: (String) -> Unit) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(label, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (on) Ink.TextStrong else if (usable) Ink.TextSoft else Ink.Bar)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Editing the note on screen: each part (the note, then each addition) is its own field, holding the
+ * version that was on screen — the clean one, or the exact words. Save writes only what changed;
+ * corrected exact words are cleaned again. [onSaved] says whether exact words changed.
+ */
+@Composable
+private fun EditCard(sections: List<Capture>, clean: Boolean, focusId: String?, onCancel: () -> Unit, onSaved: (Boolean) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // What each part holds now, and whether it is its clean version.
+    val start = remember { sections.filter { org.brain.capture.pipeline.NoteEdits.wordsEditable(it) }.associate { c ->
+        val asClean = clean && c.clean != null
+        c.id to ((if (asClean) CleanupText.editable(c.clean!!) else c.transcript.orEmpty()) to asClean)
+    } }
+    // The cursor starts at the end of each part, ready to add or correct.
+    val texts = remember { mutableStateMapOf<String, androidx.compose.ui.text.input.TextFieldValue>().apply {
+        start.forEach { (id, v) -> put(id, androidx.compose.ui.text.input.TextFieldValue(v.first, androidx.compose.ui.text.TextRange(v.first.length))) }
+    } }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val changed = start.filter { (id, v) -> texts[id]?.text != v.first }
+
+    Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            sections.forEachIndexed { i, c ->
+                if (i > 0) Text("Added ${TIME.format(Date(c.createdAt))}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    color = Ink.TextDim, modifier = Modifier.padding(top = 8.dp))
+                val v = texts[c.id]
+                if (v == null) Text(c.transcript.orEmpty().ifBlank { "(a shared file)" }, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextDim)
+                else BasicTextField(v, { texts[c.id] = it },
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Ink.Well).padding(12.dp)
+                        .then(if (c.id == focusId) Modifier.focusRequester(focus) else Modifier),
+                    enabled = !busy,
+                    textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody),
+                    cursorBrush = SolidColor(Ink.Amber))
+            }
+        }
+        error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (clean) "Lines with \"- \" are bullets; your exact words stay as they are."
+                else "The clean version is made again from your corrected words.",
+                fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f).padding(end = 8.dp))
+            androidx.compose.material3.TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel", color = Ink.TextSoft) }
+            PillButton(if (busy) "Saving…" else "Save", enabled = changed.isNotEmpty() && !busy) {
+                busy = true; error = null
+                scope.launch {
+                    var words = false
+                    runCatching {
+                        for ((id, v) in changed) {
+                            val text = texts[id]?.text.orEmpty()
+                            if (v.second) org.brain.capture.pipeline.NoteEdits.editClean(ctx, id, text)
+                            else { org.brain.capture.pipeline.NoteEdits.editWords(ctx, id, text); words = true }
+                        }
+                    }.onSuccess { onSaved(words) }.onFailure { error = it.message ?: "Could not save" }
+                    busy = false
                 }
             }
         }

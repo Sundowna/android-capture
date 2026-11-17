@@ -55,6 +55,9 @@ object Undo {
     @Synchronized
     fun forget(id: String) { if (_last.value?.id == id) clear() }
 
+    /** Something that cannot be undone happened (a hand edit): nothing older is offered any more. */
+    fun drop() = clear()
+
     @Synchronized
     private fun clear() { (_last.value as? Action.Deleted)?.let(::purge); _last.value = null; expiry?.cancel() }
 

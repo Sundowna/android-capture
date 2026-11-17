@@ -29,7 +29,7 @@ class CleanupProbeActivity : Activity() {
                 val p = org.brain.capture.types.Profiles.get(ctx, intent.getStringExtra("type") ?: "idea")
                 val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segs, p.instruction, p.checklist, java.time.LocalDate.now().toString(), p.mixed))
                 val ms = SystemClock.elapsedRealtime() - t0
-                Log.i(TAG, "Type ${p.id}: checklist=${p.checklist} mixed=${p.mixed}")
+                Log.i(TAG, "Type ${p.id}: checklist=${p.checklist} mixed=${p.mixed} instruction=${p.instruction.length} chars, example=${p.instruction.contains("Example")}")
                 Log.i(TAG, "Answer after $ms ms (${segs.size} segments):\n$answer")
                 when (val r = CleanupText.check(answer, segs, p.mixed)) {
                     is CleanupText.Result.Ok -> Log.i(TAG, "ACCEPTED\n" + CleanupText.cleanBlock(r.bullets, segs))

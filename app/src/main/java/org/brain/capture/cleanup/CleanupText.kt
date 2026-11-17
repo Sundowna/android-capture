@@ -84,7 +84,7 @@ If the transcript holds nothing to list, write only the title line. Never make u
 
     private val LETTERS = Regex("""\p{L}+""")
     /** Words the format itself adds ("Fix: …", "(due 2026-11-20)"), not the speaker. */
-    private val FORMAT_WORDS = setOf("fix", "feature", "title", "titel", "due")
+    private val FORMAT_WORDS = setOf("fix", "feature", "title", "titel", "due", "works", "question", "should", "later")
     /** A line counts as said when at least this share of its words was in the transcript. */
     private const val MIN_GROUNDED = 0.5
 
@@ -121,6 +121,9 @@ If the transcript holds nothing to list, write only the title line. Never make u
     private val ADDED = Regex("""\*\*Added (\d{1,2}:\d{2})(?::\d{2})?([^*]*)\*\*""")
     /** The sources at the end of a line: "[2,3]", "[1-3]", or several groups such as "[3] [4]". */
     private val REFS = Regex("""\s*((?:\[\s*\d+(?:\s*[,–-]\s*\d+)*\s*]\s*)+)[.]?\s*$""")
+    private val LEAD_REFS = Regex("""^(?:[-*•]\s+)?((?:\[\s*\d+(?:\s*[,–-]\s*\d+)*\s*]\s*)+)(\S.*)$""")
+    private val TODO_LINE = Regex("""^(?:Fix|Feature)\s*:""", RegexOption.IGNORE_CASE)
+    private val ONLY_REFS =Regex("""^(?:\[\s*\d+(?:\s*[,–-]\s*\d+)*\s*]\s*)+[.]?$""")
 
     /**
      * Reads the model's answer: an optional "Title:" first line (no sources needed, it only
@@ -130,6 +133,12 @@ If the transcript holds nothing to list, write only the title line. Never make u
     fun check(answer: String, segmentCount: Int, mixed: Boolean = false): Result {
         var lines = answer.replace("\r\n", "\n").lines().map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("```") }
+        // A line holding only sources belongs to the line above it (the model sometimes breaks the line there).
+        lines = lines.fold(ArrayList<String>()) { acc, l ->
+            if (acc.isNotEmpty() && ONLY_REFS.matches(l) && !REFS.containsMatchIn(acc.last())) acc[acc.size - 1] = acc.last() + " " + l
+            else acc += l
+            acc
+        }
         if (lines.isEmpty()) return Result.Rejected("empty answer")
         val title = TITLE.find(lines[0])?.groupValues?.get(1)?.trim()?.trim('"')?.take(80)?.ifEmpty { null }
         if (title != null) lines = lines.drop(1)
@@ -137,8 +146,13 @@ If the transcript holds nothing to list, write only the title line. Never make u
         val bullets = ArrayList<Bullet>()
         for ((n, line0) in lines.withIndex()) {
             // A lead-in such as "Three things for the trip:" right before a list: it takes the list's sources.
-            val line = if (line0.endsWith(":") && !REFS.containsMatchIn(line0))
+            var line = if (line0.endsWith(":") && !REFS.containsMatchIn(line0))
                 lines.getOrNull(n + 1)?.let { REFS.find(it) }?.let { line0 + " " + it.value.trim() } ?: line0 else line0
+            // Sources written in front ("- [2,3] Fix: …", "[6] Question: …") count as if they stood at the end.
+            LEAD_REFS.matchEntire(line)?.let { m ->
+                val rest = m.groupValues[2]
+                line = "- " + if (REFS.containsMatchIn(rest)) rest else rest + " " + m.groupValues[1].trim()
+            }
             val bullet = BULLET.find(line)?.groupValues?.get(1)
             // The mixed format: a line that is not a bullet is a paragraph, held to the same rules.
             if (bullet == null && !mixed) return Result.Rejected("not a bullet: \"${line.take(60)}\"")
@@ -151,7 +165,9 @@ If the transcript holds nothing to list, write only the title line. Never make u
                 return Result.Rejected("segment number out of range in \"${body.take(60)}\"")
             val text = body.substring(0, m.range.first).trim()
             if (text.isEmpty()) return Result.Rejected("bullet with numbers only")
-            bullets += Bullet(text, refs, task = task != null, para = bullet == null)
+            // Fix and Feature lines are to-dos: the app gives them their box (the model mixes boxes up with sources).
+            val todo = task != null || (bullet != null && TODO_LINE.containsMatchIn(text))
+            bullets += Bullet(text, refs, task = todo, para = bullet == null)
         }
         return Result.Ok(bullets, title)
     }
@@ -203,12 +219,37 @@ If the transcript holds nothing to list, write only the title line. Never make u
      * The lines alone, each ending with its sources: "- text [1,2]", "- [ ] text [3]", or a paragraph
      * "text [4,5]". Paragraphs stand apart from their neighbours by a blank line, as Markdown needs.
      */
-    fun bulletLines(bullets: List<Bullet>): String = buildString {
+    fun bulletLines(bullets: List<Bullet>, withRefs: Boolean = true): String = buildString {
         bullets.forEachIndexed { i, b ->
             if (i > 0) append(if (b.para || bullets[i - 1].para) "\n\n" else "\n")
-            val refs = " [${b.refs.joinToString(",")}]"
+            val refs = if (withRefs) " [${b.refs.joinToString(",")}]" else ""
             append(if (b.para) b.text + refs else "- ${if (b.task) "[ ] " else ""}${b.text}$refs")
         }
+    }
+
+    /** A stored clean version as the user edits it: the lines without the title and sources. */
+    fun editable(stored: String): String = bulletLines(bulletsFromStored(stored), withRefs = false)
+
+    /**
+     * The edited text back as lines: "- " bullets, "- [ ] " tasks, anything else a paragraph. Each keeps
+     * the sources of the old line with the same text, or of the old line in its place; new lines past
+     * the end take the last line's. So every line stays linked to the exact words.
+     */
+    fun fromEditable(text: String, old: List<Bullet>): List<Bullet> =
+        text.replace("\r\n", "\n").lines().map { it.trim() }.filter { it.isNotEmpty() }.mapIndexed { i, l ->
+            val task = l.startsWith("- [ ] ") || l.startsWith("- [x] ")
+            val bullet = !task && (l.startsWith("- ") || l.startsWith("* ") || l.startsWith("• "))
+            val body = when { task -> l.drop(6); bullet -> l.drop(2); else -> l }.trim()
+            val refs = old.firstOrNull { it.text == body }?.refs ?: old.getOrNull(i)?.refs ?: old.lastOrNull()?.refs ?: listOf(1)
+            Bullet(body, refs, task = task, para = !task && !bullet)
+        }.filter { it.text.isNotEmpty() }
+
+    /** The note with [old] (standing once, on lines of its own) replaced by [new]; null if it is not there like that. */
+    fun replaceWords(note: String, old: String, new: String): String? {
+        val (front, body) = NoteText.split(note)
+        val hits = lineOccurrences(body, old)
+        if (old.isBlank() || hits.size != 1) return null
+        return front + body.substring(0, hits[0]) + new + body.substring(hits[0] + old.length)
     }
 
     /** What the app keeps for the capture screen and cards: "# Title" (if any), then the bullets. */

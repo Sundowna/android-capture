@@ -90,6 +90,44 @@ class CleanupTextTest {
             "• Book the train\n• Call Anna\n• Pack the charger", CleanupText.forDisplay(CleanupText.bulletLines(r.bullets)))
     }
 
+    @Test fun editingTheCleanVersionKeepsSources() {
+        val stored = "# Trip\nWe go to Bern on Friday. [1]\n\n- Book the train [2]\n- Call Anna [3]"
+        assertEquals("We go to Bern on Friday.\n\n- Book the train\n- Call Anna", CleanupText.editable(stored))
+        val old = CleanupText.bulletsFromStored(stored)
+        // Reworded first line keeps its place's sources; a moved line keeps its own; a new line takes the last one's.
+        val edited = CleanupText.fromEditable("We go to Bern on Friday morning.\n- Call Anna\n- [ ] Book the train\n- Pack the charger", old)
+        assertEquals(listOf(
+            Bullet("We go to Bern on Friday morning.", listOf(1), para = true),
+            Bullet("Call Anna", listOf(3)),
+            Bullet("Book the train", listOf(2), task = true),
+            Bullet("Pack the charger", listOf(3)),
+        ), edited)
+    }
+
+    @Test fun replacesExactWordsOnce() {
+        val note = "---\nid: x\n---\n\nI need to call Anna.\n\n![[a.ogg]]\n"
+        assertEquals("---\nid: x\n---\n\nI need to call Hannah.\n\n![[a.ogg]]\n",
+            CleanupText.replaceWords(note, "I need to call Anna.", "I need to call Hannah."))
+        assertEquals(null, CleanupText.replaceWords(note, "call Anna", "call Hannah")) // not on lines of its own
+    }
+
+    @Test fun sourcesOnTheirOwnLineJoinTheLineAbove() {
+        val r = CleanupText.check("Title: Search\n- [ ] Fix: search bar — disappears with no results\n[2,3]\n- Works: thumbnails [1]", 3) as Result.Ok
+        assertEquals(listOf(Bullet("Fix: search bar — disappears with no results", listOf(2, 3), task = true),
+            Bullet("Works: thumbnails", listOf(1))), r.bullets)
+    }
+
+    @Test fun feedbackLinesGetBoxesAndFrontSources() {
+        val r = CleanupText.check("Title: Feedback\n- [1,2] Fix: stop button — recording keeps going\n[6] Question: is this doable?\n" +
+            "- Feature: share screen — pick a note [3]\n- Works: the sliding [4]", 6) as Result.Ok
+        assertEquals(listOf(
+            Bullet("Fix: stop button — recording keeps going", listOf(1, 2), task = true),
+            Bullet("Question: is this doable?", listOf(6)),
+            Bullet("Feature: share screen — pick a note", listOf(3), task = true),
+            Bullet("Works: the sliding", listOf(4)),
+        ), r.bullets)
+    }
+
     @Test fun mergesSeveralSourceGroups() {
         val r = CleanupText.check("- Pack the charger [3] [4]", 4) as Result.Ok
         assertEquals(Bullet("Pack the charger", listOf(3, 4)), r.bullets.single())
