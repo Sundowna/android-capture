@@ -37,6 +37,7 @@ class BrainWidget : AppWidgetProvider() {
                 val manager = AppWidgetManager.getInstance(app)
                 val ids = manager.getAppWidgetIds(ComponentName(app, BrainWidget::class.java))
                 if (ids.isNotEmpty()) manager.updateAppWidget(ids, views(app, last))
+                runCatching { ButtonWidget.refreshAll(app) } // 1x1 buttons follow renamed or re-iconed types
                 runCatching { TileService.requestListeningState(app, ComponentName(app, BrainTile::class.java)) }
             }
         }

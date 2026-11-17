@@ -327,10 +327,14 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (mode == CaptureActivity.MODE_TYPE) "Type a thought" else "Paste from clipboard",
+                    Text(when {
+                        note?.state == CaptureStates.SAVED && !undone -> if (mode == CaptureActivity.MODE_TYPE) "Type to add to this note" else "Paste into this note"
+                        mode == CaptureActivity.MODE_TYPE -> "Type a thought"
+                        else -> "Paste from clipboard"
+                    },
                         fontFamily = Grotesk, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text,
                         modifier = Modifier.weight(1f))
-                    if (zoneTypes.size > 1) TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
+                    if (zoneTypes.size > 1 && (note?.state != CaptureStates.SAVED || undone)) TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
                 }
             }
 
@@ -341,8 +345,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                         liveText = live, cleaningId = cleaningId, gemmaInstalled = gemmaInstalled,
                         undone = undone, watched = watched, revealed = revealed, onTyped = { typedDone = it },
                     )
-                    else -> TextCard(mode, private, type, onSaved = { c ->
-                        noteId = c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
+                    else -> TextCard(mode, private, type, appendTo = note?.takeIf { it.state == CaptureStates.SAVED && !undone }, onSaved = { c ->
+                        noteId = c.appendTo ?: c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
                         if (c.id !in watched) watched += c.id // typed here: Undo can take it back
                     })
                 }
@@ -410,7 +414,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 )
             }
 
-            ModeRow(mode, enabled = recording == null) { m -> if (m != mode) { mode = m; if (m != CaptureActivity.MODE_VOICE) newNote() } }
+            // Type and Paste add to the note on screen; with no finished note open they start a new one.
+            ModeRow(mode, enabled = recording == null) { m -> if (m != mode) { mode = m; if (m != CaptureActivity.MODE_VOICE && note?.state != CaptureStates.SAVED) newNote() } }
         }
     }
 }
@@ -806,7 +811,7 @@ private fun ModeRow(mode: String, enabled: Boolean, onMode: (String) -> Unit) {
 
 /** Type or paste: write it, save it. After saving, the note shows like any other, with Undo. */
 @Composable
-private fun TextCard(mode: String, private: Boolean, typeId: String, onSaved: (Capture) -> Unit) {
+private fun TextCard(mode: String, private: Boolean, typeId: String, appendTo: Capture? = null, onSaved: (Capture) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by rememberSaveable(mode) { mutableStateOf("") }
@@ -830,12 +835,16 @@ private fun TextCard(mode: String, private: Boolean, typeId: String, onSaved: (C
         }
         error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (private) "Kept on this phone only" else "Goes to your inbox as ${Profiles.get(ctx, typeId).name}",
+            Text(when {
+                appendTo != null -> "Adds to this note"
+                private -> "Kept on this phone only"
+                else -> "Goes to your inbox as ${Profiles.get(ctx, typeId).name}"
+            },
                 fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f))
             PillButton(if (busy) "Saving…" else "Save", enabled = text.isNotBlank() && !busy) {
                 busy = true; error = null
                 scope.launch {
-                    runCatching { TextCapture.save(ctx, text.trim(), typeId) }
+                    runCatching { if (appendTo != null) TextCapture.append(ctx, appendTo, text.trim()) else TextCapture.save(ctx, text.trim(), typeId) }
                         .onSuccess { text = ""; onSaved(it) }
                         .onFailure { error = it.message ?: "Could not save" }
                     busy = false

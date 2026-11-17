@@ -3,4 +3,5 @@
     <string name="quick_record">Talk</string>
     <string name="widget_description">Talk an idea, a task or a private note with one tap.</string>
     <string name="tile_label">Brain</string>
+    <string name="widget_button_description">One capture type, one tap to start talking.</string>
 </resources>

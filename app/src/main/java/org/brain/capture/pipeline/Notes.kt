@@ -187,6 +187,7 @@ object Notes {
     suspend fun deleteAddition(ctx: Context, a: Capture) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
         val owner = a.appendTo?.let { dao.get(it) } ?: error("Note not found")
+        if (owner.isPrivate) { dao.deleteWithAdditions(a.id); dao.touch(owner.id, System.currentTimeMillis()); cache.remove(owner.id); return@withContext }
         val vault = vault(ctx)
         val path = locate(ctx, vault, owner) ?: throw VaultUnavailableException("Note not found")
         val note = vault.read(path) ?: throw VaultUnavailableException("Note not found")
