@@ -196,6 +196,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     var view by rememberSaveable { mutableStateOf(View.Clean) }
     var userPickedView by rememberSaveable { mutableStateOf(false) }
     var undone by remember { mutableStateOf(false) }
+    // The note left by switching Open/Private, and its zone: switching back returns to it.
+    var leftNote by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
 
     // Whatever is being recorded belongs to the note on screen (a new one, or an addition).
     LaunchedEffect(recording?.captureId) {
@@ -234,6 +236,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         else { pendingAppend = appendTo; permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
     }
     fun newNote() { noteId = null; undone = false; userPickedView = false; view = View.Raw }
+    LaunchedEffect(recording?.captureId) { if (recording != null) leftNote = null }
 
     // A widget, tile or app request: switch to it, and start talking if asked.
     LaunchedEffect(request?.at) {
@@ -283,7 +286,19 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             TopBar(private, locked = recording?.appendTo != null,
-                onPrivate = { p -> if ((note?.state == CaptureStates.SAVED || undone) && p != private) newNote(); private = p }, onClose = onClose)
+                onPrivate = { p ->
+                    if (p != private) {
+                        val n = note
+                        when {
+                            // Leaving a finished note for the other zone: start fresh there, but remember it…
+                            n != null && n.state == CaptureStates.SAVED && !undone -> { leftNote = n.id to n.isPrivate; newNote() }
+                            // …so tapping back (before anything new was started) returns to it.
+                            noteId == null && recording == null && leftNote?.second == p -> { noteId = leftNote?.first; leftNote = null }
+                            undone -> newNote()
+                        }
+                        private = p
+                    }
+                }, onClose = onClose)
 
             // A typed or pasted note has no audio and no clean version: no voice tabs for it.
             val typedNote = note != null && note?.kind != "voice" && additions.none { it.kind == "voice" } && !recordingHere && !undone
@@ -451,8 +466,8 @@ private fun TypeChip(selected: String, types: List<org.brain.capture.types.Captu
             .semantics { contentDescription = "Capture type ${current.name}, tap to change" }
             .heightIn(min = 44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(painterResource(typeIcon(current.icon)), null, Modifier.size(16.dp), tint = Ink.TextDim)
-            Text("${current.name} ▾", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextDim)
+            Icon(painterResource(typeIcon(current.icon)), null, Modifier.size(16.dp), tint = Ink.Amber)
+            Text("${current.name} ▾", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber)
         }
         androidx.compose.material3.DropdownMenu(open, { open = false }, containerColor = Ink.Panel) {
             if (again) Text("Clean again as…", fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
