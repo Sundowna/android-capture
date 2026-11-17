@@ -63,7 +63,7 @@ data class Capture(
     val clean: String? = null,
 ) {
     /** Private captures stay inside the app: never written to the vault. */
-    val isPrivate: Boolean get() = type == CaptureTypes.PRIVATE
+    val isPrivate: Boolean get() = org.brain.capture.types.Profiles.isPrivateId(type)
 }
 
 object CaptureTypes {

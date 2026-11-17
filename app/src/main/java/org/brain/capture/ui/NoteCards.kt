@@ -137,7 +137,7 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 else Meta(when {
                     c.isPrivate -> "Private · on this phone · ${relativeTime(c.lastActivityAt)}" +
                         (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
-                    c.type == "task" -> "Task · ${relativeTime(c.lastActivityAt)}" +
+                    c.type != "idea" -> "${org.brain.capture.types.Profiles.get(ctx, c.type).name} · ${relativeTime(c.lastActivityAt)}" +
                         (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
                     else -> when (c.kind) {
                     "voice" -> "Voice · ${relativeTime(c.lastActivityAt)} · ${duration(c.audioSeconds)}"

@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.service.quicksettings.TileService
+import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,7 @@ import kotlinx.coroutines.launch
 import org.brain.capture.R
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
-import org.brain.capture.data.CaptureTypes
+import org.brain.capture.types.Profiles
 
 /**
  * Screen 8 of the UX concepts as a home-screen widget: Idea, Task and Private start talking with
@@ -40,20 +41,44 @@ class BrainWidget : AppWidgetProvider() {
             }
         }
 
+        private val SLOT = intArrayOf(R.id.w_slot1, R.id.w_slot2, R.id.w_slot3, R.id.w_slot4)
+        private val ICON = intArrayOf(R.id.w_icon1, R.id.w_icon2, R.id.w_icon3, R.id.w_icon4)
+        private val TITLE = intArrayOf(R.id.w_title1, R.id.w_title2, R.id.w_title3, R.id.w_title4)
+        private val SUB = intArrayOf(R.id.w_sub1, R.id.w_sub2, R.id.w_sub3, R.id.w_sub4)
+
+        /** Fills the slots from Settings → Capture types: the first one amber, then the rest, then Open Brain. */
         private fun views(ctx: Context, last: Capture?) = RemoteViews(ctx.packageName, R.layout.widget_brain).apply {
-            fun capture(type: String, code: Int) = PendingIntent.getActivity(ctx, code,
-                CaptureActivity.intent(ctx, type, start = true), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            setOnClickPendingIntent(R.id.w_btn_idea, capture(CaptureTypes.IDEA, 11))
-            setOnClickPendingIntent(R.id.w_btn_task, capture(CaptureTypes.TASK, 12))
-            setOnClickPendingIntent(R.id.w_btn_private, capture(CaptureTypes.PRIVATE, 13))
-            setOnClickPendingIntent(R.id.w_btn_open, PendingIntent.getActivity(ctx, 14,
-                Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE))
-            setTextViewText(R.id.widget_last, last?.let { "Last capture: ${describe(it)} · ${status(it)}" } ?: "No captures yet")
+            val slots = Profiles.widgetSlots(ctx)
+            for (i in 0 until Profiles.WIDGET_SLOTS) {
+                val shown = i < slots.size
+                setViewVisibility(SLOT[i], if (shown) View.VISIBLE else View.GONE)
+                if (!shown) continue
+                val p = slots[i]
+                val first = i == 0 && p != null
+                setInt(SLOT[i], "setBackgroundResource", if (first) R.drawable.w_amber else R.drawable.w_panel)
+                setImageViewResource(ICON[i], if (p == null) R.drawable.t_open else typeIcon(p.icon))
+                setInt(ICON[i], "setColorFilter", if (first) 0xFF2A2118.toInt() else 0xFFEEF0F2.toInt())
+                setTextViewText(TITLE[i], p?.name ?: "Open Brain")
+                setTextViewText(SUB[i], p?.subtitle ?: "notes and recent captures")
+                setTextColor(TITLE[i], if (first) 0xFF2A2118.toInt() else 0xFFEEF0F2.toInt())
+                setTextColor(SUB[i], if (first) 0xD92A2118.toInt() else 0xFFC3C8CF.toInt())
+                setContentDescription(SLOT[i], if (p == null) "Open Brain" else "${p.name}, start talking")
+                setOnClickPendingIntent(SLOT[i], if (p == null)
+                    PendingIntent.getActivity(ctx, 30, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
+                else PendingIntent.getActivity(ctx, 20 + i, CaptureActivity.intent(ctx, p.id, start = true),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            }
+            // Gaps and the second row only where there are buttons on both sides.
+            setViewVisibility(R.id.w_gap1, if (slots.size >= 2) View.VISIBLE else View.GONE)
+            setViewVisibility(R.id.w_gap2, if (slots.size >= 4) View.VISIBLE else View.GONE)
+            setViewVisibility(R.id.w_row2, if (slots.size > 2) View.VISIBLE else View.GONE)
+            setViewVisibility(R.id.w_rowgap, if (slots.size > 2) View.VISIBLE else View.GONE)
+            setTextViewText(R.id.widget_last, last?.let { "Last capture: ${describe(ctx, it)} · ${status(it)}" } ?: "No captures yet")
         }
 
-        /** "Idea · 0:48", "Task · typed", "Private · 1:12". */
-        fun describe(c: Capture): String {
-            val type = when (c.type) { CaptureTypes.TASK -> "Task"; CaptureTypes.PRIVATE -> "Private"; else -> "Idea" }
+        /** "Idea · 0:48", "Task · typed", "Private · 1:12", with the type's own name. */
+        fun describe(ctx: Context, c: Capture): String {
+            val type = Profiles.get(ctx, c.type).name
             val s = c.audioSeconds.toLong()
             return when (c.kind) {
                 "voice" -> "$type · %d:%02d".format(s / 60, s % 60)

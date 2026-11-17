@@ -179,6 +179,7 @@ private fun HomeScreen(
     LifecycleResumeEffect(Unit) { refresh++; resumedAt = System.currentTimeMillis(); onPauseOrDispose { } }
     LaunchedEffect(Unit) {
         Notes.importHistory(ctx); Notes.recoverEdits(ctx)
+        Shortcuts.update(ctx) // long-press the app icon: one shortcut per capture type
         org.brain.capture.share.Shares.resumePending(ctx) // shares that could not be saved earlier
         // Recordings left over from an interruption are finished automatically.
         if (!phase.isBusy && phase !is Phase.Failed && CaptureService.pendingRecordings(ctx).isNotEmpty())

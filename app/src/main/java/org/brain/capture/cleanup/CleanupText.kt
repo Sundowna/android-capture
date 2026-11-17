@@ -8,22 +8,15 @@ import org.brain.capture.vault.NoteText
  * writing the clean version into the note.
  */
 object CleanupText {
-    /** Fixed instruction for ideas (and private notes); the numbered transcript follows it. */
-    const val INSTRUCTION = """Rewrite this voice note as clean bullet points.
-Rules: remove filler words and repeats, fix grammar, put related points together.
-Use only what the speaker said. Add no facts, opinions or conclusions.
-Keep the language of the transcript.
-After each bullet, give the transcript segment numbers it came from, e.g. [2,3].
+    /**
+     * The rules every instruction ends with, whatever the user wrote above them: they make each line
+     * traceable (segment numbers) and give the answer the shape [check] reads. Not editable.
+     */
+    private const val BULLET_RULES = """After each bullet, give the transcript segment numbers it came from, e.g. [2,3].
 First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
 Then the bullet points only, one per line, each starting with "- "."""
 
-    /** Instruction for tasks: a checklist; [today] lets the model turn "Friday" into a date. */
-    fun taskInstruction(today: String) = """Rewrite this voice note as a checklist of tasks.
-Rules: one task per line, short and starting with a verb; remove filler words and repeats.
-Leave out remarks that are not tasks, such as "okay", "task list" or questions to yourself.
-Use only what the speaker said. Add no tasks, facts or opinions.
-Keep the language of the transcript.
-If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
+    private fun checklistRules(today: String) = """If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
 After each task, give the transcript segment numbers it came from, e.g. [2,3].
 First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
 Then the tasks only, one per line, each starting with "- [ ] "."""
@@ -50,9 +43,15 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
         return out
     }
 
-    /** [type] is the capture type ("task" gets a checklist); [today] is ISO yyyy-MM-dd. */
-    fun prompt(segments: List<String>, type: String = "idea", today: String = ""): String = buildString {
-        appendLine(if (type == "task") taskInstruction(today) else INSTRUCTION)
+    /** The built-in Idea or Task instruction; kept for callers that only know the type. */
+    fun prompt(segments: List<String>, type: String = "idea", today: String = ""): String =
+        prompt(segments, if (type == "task") org.brain.capture.types.Profiles.TASK_INSTRUCTION else org.brain.capture.types.Profiles.IDEA_INSTRUCTION,
+            checklist = type == "task", today = today)
+
+    /** [instruction] is the type's own (editable) text; the fixed rules for its format follow it. */
+    fun prompt(segments: List<String>, instruction: String, checklist: Boolean, today: String): String = buildString {
+        appendLine(instruction.trim())
+        appendLine(if (checklist) checklistRules(today) else BULLET_RULES)
         appendLine()
         appendLine("Transcript:")
         segments.forEachIndexed { i, s -> appendLine("[${i + 1}] $s") }

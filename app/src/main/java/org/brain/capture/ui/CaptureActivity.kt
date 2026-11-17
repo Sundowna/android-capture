@@ -107,6 +107,7 @@ import org.brain.capture.data.CaptureStates
 import org.brain.capture.data.CaptureTypes
 import org.brain.capture.pipeline.Notes
 import org.brain.capture.pipeline.TextCapture
+import org.brain.capture.types.Profiles
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -182,9 +183,14 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val cleaningId by CleanupStep.cleaning.collectAsState()
 
     var mode by rememberSaveable { mutableStateOf(request?.mode ?: CaptureActivity.MODE_VOICE) }
-    var kind by rememberSaveable { mutableStateOf(request?.type?.takeIf { it != CaptureTypes.PRIVATE } ?: CaptureTypes.IDEA) }
-    var private by rememberSaveable { mutableStateOf(request?.type == CaptureTypes.PRIVATE) }
-    val type = if (private) CaptureTypes.PRIVATE else kind
+    // The capture type ("agent"): one for the Open zone, one for the Private zone (Settings → Capture types).
+    val profiles by remember { Profiles.flow(ctx) }.collectAsState()
+    var kind by rememberSaveable { mutableStateOf(request?.type?.takeIf { !Profiles.isPrivateId(it) } ?: Profiles.primary(ctx).id) }
+    var privateKind by rememberSaveable { mutableStateOf(request?.type?.takeIf { Profiles.isPrivateId(it) }
+        ?: Profiles.all(ctx).firstOrNull { it.private }?.id ?: Profiles.PRIVATE) }
+    var private by rememberSaveable { mutableStateOf(Profiles.isPrivateId(request?.type)) }
+    val type = if (private) privateKind else kind
+    val zoneTypes = profiles.orEmpty().filter { it.private == private }
     var noteId by rememberSaveable { mutableStateOf(request?.noteId ?: recording?.let { it.appendTo ?: it.captureId }) }
     var view by rememberSaveable { mutableStateOf(View.Clean) }
     var userPickedView by rememberSaveable { mutableStateOf(false) }
@@ -232,7 +238,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     LaunchedEffect(request?.at) {
         val r = request ?: return@LaunchedEffect
         mode = r.mode
-        if (r.type == CaptureTypes.PRIVATE) private = true else { kind = r.type; private = false }
+        if (Profiles.isPrivateId(r.type)) { private = true; privateKind = r.type } else { kind = r.type; private = false }
         if (r.noteId != null) noteId = r.noteId else if (r.start && recording == null) newNote()
         if (r.start && r.mode == CaptureActivity.MODE_VOICE && recording == null)
             talk(r.noteId?.let { dao.get(it) }?.takeIf { it.state == CaptureStates.SAVED && !it.isPrivate })
@@ -268,7 +274,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         }
     }
     // The note shown decides the zone and kind chips (an opened private note shows Private).
-    LaunchedEffect(note?.id) { note?.let { if (it.isPrivate) private = true else { private = false; kind = it.type } } }
+    LaunchedEffect(note?.id) { note?.let { if (it.isPrivate) { private = true; privateKind = it.type } else { private = false; kind = it.type } } }
 
     Box(Modifier.fillMaxSize().background(Ink.Ground)) {
         Column(
@@ -291,15 +297,15 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
                     ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
                     Spacer(Modifier.weight(1f))
-                    if (!private && (note == null || recordingHere && recording?.appendTo == null))
-                        KindChip(kind) { kind = if (kind == CaptureTypes.TASK) CaptureTypes.IDEA else CaptureTypes.TASK }
+                    if (zoneTypes.size > 1 && (note == null || recordingHere && recording?.appendTo == null))
+                        TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(if (mode == CaptureActivity.MODE_TYPE) "Type a thought" else "Paste from clipboard",
                         fontFamily = Grotesk, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text,
                         modifier = Modifier.weight(1f))
-                    if (!private) KindChip(kind) { kind = if (kind == CaptureTypes.TASK) CaptureTypes.IDEA else CaptureTypes.TASK }
+                    if (zoneTypes.size > 1) TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
                 }
             }
 
@@ -310,7 +316,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                         liveText = live, cleaningId = cleaningId, gemmaInstalled = gemmaInstalled,
                         undone = undone, watched = watched, revealed = revealed, onTyped = { typedDone = it },
                     )
-                    else -> TextCard(mode, private, kind, onSaved = { c ->
+                    else -> TextCard(mode, private, type, onSaved = { c ->
                         noteId = c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
                     })
                 }
@@ -411,13 +417,30 @@ private fun ViewTab(label: String, sub: String, on: Boolean, onClick: () -> Unit
     }
 }
 
-/** Idea or Task: the instruction Gemma follows. A tap switches; nothing to decide up front. */
+/** The capture type for this note; a tap opens the list (Settings → Capture types edits them). */
 @Composable
-private fun KindChip(kind: String, onToggle: () -> Unit) {
-    Box(Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggle)
-        .semantics { contentDescription = "Capture type ${if (kind == CaptureTypes.TASK) "Task" else "Idea"}, tap to switch" }
-        .heightIn(min = 44.dp).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-        Text(if (kind == CaptureTypes.TASK) "Task ⇄" else "Idea ⇄", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextDim)
+private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val current = types.firstOrNull { it.id == selected } ?: types.first()
+    Box {
+        Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable { open = true }
+            .semantics { contentDescription = "Capture type ${current.name}, tap to change" }
+            .heightIn(min = 44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(painterResource(typeIcon(current.icon)), null, Modifier.size(16.dp), tint = Ink.TextDim)
+            Text("${current.name} ▾", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextDim)
+        }
+        androidx.compose.material3.DropdownMenu(open, { open = false }, containerColor = Ink.Panel) {
+            types.forEach { t ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Column {
+                        Text(t.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (t.id == current.id) Ink.Amber else Ink.Text)
+                        if (t.subtitle.isNotBlank()) Text(t.subtitle, fontSize = 12.sp, color = Ink.TextDim)
+                    } },
+                    leadingIcon = { Icon(painterResource(typeIcon(t.icon)), null, Modifier.size(18.dp), tint = Ink.TextSoft) },
+                    onClick = { open = false; onPick(t.id) })
+            }
+        }
     }
 }
 
@@ -739,7 +762,7 @@ private fun ModeRow(mode: String, enabled: Boolean, onMode: (String) -> Unit) {
 
 /** Type or paste: write it, save it. After saving, the note shows like any other, with Undo. */
 @Composable
-private fun TextCard(mode: String, private: Boolean, kind: String, onSaved: (Capture) -> Unit) {
+private fun TextCard(mode: String, private: Boolean, typeId: String, onSaved: (Capture) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by rememberSaveable(mode) { mutableStateOf("") }
@@ -763,12 +786,12 @@ private fun TextCard(mode: String, private: Boolean, kind: String, onSaved: (Cap
         }
         error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (private) "Kept on this phone only" else if (kind == CaptureTypes.TASK) "Goes to your inbox as a task note" else "Goes to your inbox",
+            Text(if (private) "Kept on this phone only" else "Goes to your inbox as ${Profiles.get(ctx, typeId).name}",
                 fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f))
             PillButton(if (busy) "Saving…" else "Save", enabled = text.isNotBlank() && !busy) {
                 busy = true; error = null
                 scope.launch {
-                    runCatching { TextCapture.save(ctx, text.trim(), if (private) CaptureTypes.PRIVATE else kind) }
+                    runCatching { TextCapture.save(ctx, text.trim(), typeId) }
                         .onSuccess { text = ""; onSaved(it) }
                         .onFailure { error = it.message ?: "Could not save" }
                     busy = false

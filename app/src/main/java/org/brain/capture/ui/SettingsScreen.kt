@@ -63,6 +63,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Settings", style = MaterialTheme.typography.headlineSmall)
         }
 
+        Section("Capture types and widget") { CaptureTypesSettings() }
         Section("Vault") {
             VaultSetup()
             var inbox by remember { mutableStateOf(prefs.inboxFolder) }

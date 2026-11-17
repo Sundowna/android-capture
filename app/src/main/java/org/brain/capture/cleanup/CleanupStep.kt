@@ -50,7 +50,9 @@ object CleanupStep {
 
         cleaning.value = c.id
         val t0 = SystemClock.elapsedRealtime()
-        val prompt = CleanupText.prompt(segments, owner.type, today)
+        // The note's capture type decides the instruction (editable in Settings → Capture types).
+        val profile = org.brain.capture.types.Profiles.get(ctx, owner.type)
+        val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, today)
         var result: CleanupText.Result
         try {
             var answer = GemmaHolder.generate(ctx, prompt)

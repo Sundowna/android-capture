@@ -1,0 +1,216 @@
+package org.brain.capture.ui
+
+import android.content.Context
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.graphics.drawable.Icon
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon as MIcon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import org.brain.capture.R
+import org.brain.capture.types.CaptureProfile
+import org.brain.capture.types.Profiles
+
+/** Drawable for a type's icon name. */
+fun typeIcon(name: String): Int = when (name) {
+    "idea" -> R.drawable.t_idea; "task" -> R.drawable.t_task; "people" -> R.drawable.t_people; "mic" -> R.drawable.t_mic
+    "lock" -> R.drawable.t_lock; "book" -> R.drawable.t_book; "cart" -> R.drawable.t_cart; else -> R.drawable.t_star
+}
+
+/**
+ * Settings → Capture types: each type ("agent") with its name, icon and the instruction Gemma
+ * follows; which ones the widget shows; and a one-tap home-screen icon for any of them.
+ * [widgetOnly] is the short version the widget's own "Edit widget" opens.
+ */
+@Composable
+fun CaptureTypesSettings(widgetOnly: Boolean = false) {
+    val ctx = LocalContext.current
+    val profiles by remember { Profiles.flow(ctx) }.collectAsState()
+    val list = profiles ?: return
+    var editing by remember { mutableStateOf<CaptureProfile?>(null) }
+    var openBrain by remember { mutableStateOf(Profiles.widgetOpenBrain(ctx)) }
+    val onWidget = list.count { it.onWidget }
+    val room = Profiles.WIDGET_SLOTS - if (openBrain) 1 else 0
+
+    Text(if (widgetOnly) "Choose the widget's buttons. Tap a type to edit its name, icon or AI instruction."
+        else "Each type has its own instruction for the AI. Tap one to edit it; the widget shows up to $room of them.",
+        fontSize = 13.sp, color = Ink.TextDim)
+    list.forEachIndexed { i, p ->
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { editing = p }.heightIn(min = 60.dp)
+            .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(if (i == 0) Ink.Amber else Ink.Well), contentAlignment = Alignment.Center) {
+                MIcon(painterResource(typeIcon(p.icon)), null, Modifier.size(20.dp), tint = if (i == 0) Ink.OnAmber else Ink.TextStrong)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(p.name.ifBlank { "Unnamed" }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.Text)
+                Text(p.subtitle.ifBlank { listOfNotNull(if (p.private) "stays on phone" else null, if (p.checklist) "checklist" else null)
+                    .joinToString(" · ") }, fontSize = 12.sp, color = Ink.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (!widgetOnly && i > 0) TextButton(onClick = { Profiles.move(ctx, p.id, -1); Shortcuts.update(ctx); BrainWidget.refresh(ctx) }) { Text("↑") }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Switch(checked = p.onWidget, enabled = p.onWidget || onWidget < room, onCheckedChange = {
+                    Profiles.put(ctx, p.copy(onWidget = it)); Shortcuts.update(ctx); BrainWidget.refresh(ctx)
+                }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
+                Text("widget", fontSize = 10.sp, color = Ink.TextDim)
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Open Brain button", fontSize = 15.sp, color = Ink.Text)
+            Text("Opens your notes from the widget", fontSize = 12.sp, color = Ink.TextDim)
+        }
+        Switch(checked = openBrain, onCheckedChange = {
+            // Turning it on needs a free slot: the last type on the widget makes room.
+            if (it && onWidget >= Profiles.WIDGET_SLOTS) list.lastOrNull { p -> p.onWidget }?.let { p -> Profiles.put(ctx, p.copy(onWidget = false)) }
+            openBrain = it; Profiles.setWidgetOpenBrain(ctx, it); BrainWidget.refresh(ctx)
+        }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { editing = Profiles.newProfile(private = false) }) { Text("+ New type") }
+        TextButton(onClick = { editing = Profiles.newProfile(private = true) }) { Text("+ New private type") }
+    }
+    editing?.let { e -> ProfileEditor(e, canDelete = list.size > 1 && list.any { it.id == e.id }, onDone = {
+        editing = null; Shortcuts.update(ctx); BrainWidget.refresh(ctx)
+    }) }
+}
+
+@Composable
+private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    var p by remember { mutableStateOf(start) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDone,
+        containerColor = Ink.Panel,
+        title = { Text(if (start.name.isBlank()) "New ${if (start.private) "private " else ""}type" else "Edit ${start.name}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(p.name, { p = p.copy(name = it.take(24)) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(p.subtitle, { p = p.copy(subtitle = it.take(40)) }, label = { Text("Short description") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Icon", fontSize = 13.sp, color = Ink.TextDim)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Profiles.ICONS.forEach { name ->
+                        Box(Modifier.size(36.dp).clip(CircleShape).background(if (p.icon == name) Ink.Amber else Ink.Raised)
+                            .clickable { p = p.copy(icon = name) }, contentAlignment = Alignment.Center) {
+                            MIcon(painterResource(typeIcon(name)), name, Modifier.size(18.dp), tint = if (p.icon == name) Ink.OnAmber else Ink.TextStrong)
+                        }
+                    }
+                }
+                OutlinedTextField(p.instruction, { p = p.copy(instruction = it) }, label = { Text("Instruction for the AI") },
+                    minLines = 5, modifier = Modifier.fillMaxWidth())
+                Text("The app adds the rules that keep every line linked to your exact words, and the title.",
+                    fontSize = 12.sp, color = Ink.TextDim)
+                Profiles.default(p.id)?.let { d ->
+                    if (d.instruction != p.instruction) TextButton(onClick = { p = p.copy(instruction = d.instruction) }) { Text("Reset to the original instruction") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Checklist with due dates", fontSize = 15.sp, color = Ink.Text)
+                        Text("\"- [ ]\" tasks instead of bullets", fontSize = 12.sp, color = Ink.TextDim)
+                    }
+                    Switch(p.checklist, { p = p.copy(checklist = it) }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
+                }
+                if (p.private) Text("Private: notes of this type stay inside the app and never go to the vault.", fontSize = 12.sp, color = Ink.Blue)
+                if (p.name.isNotBlank()) TextButton(onClick = { Shortcuts.pin(ctx, p) }) { Text("Add a one-tap icon to the home screen") }
+                if (canDelete) TextButton(onClick = { confirmDelete = true }) { Text("Delete this type", color = Ink.Error) }
+            }
+        },
+        confirmButton = { TextButton(enabled = p.name.isNotBlank(), onClick = {
+            Profiles.put(ctx, p.copy(name = p.name.trim(), subtitle = p.subtitle.trim(),
+                instruction = p.instruction.ifBlank { Profiles.IDEA_INSTRUCTION }))
+            onDone()
+        }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } },
+    )
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false }, containerColor = Ink.Panel,
+        title = { Text("Delete ${p.name}?") },
+        text = { Text("Notes already saved keep their text. New notes can't use this type any more; its widget button and icon go away.") },
+        confirmButton = { TextButton(onClick = { Profiles.delete(ctx, p.id); confirmDelete = false; onDone() }) { Text("Delete", color = Ink.Error) } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Keep") } },
+    )
+}
+
+/** Home-screen shortcuts: one per type on long-press of the app icon, and pinned one-tap icons. */
+object Shortcuts {
+    fun update(ctx: Context) = runCatching {
+        val sm = ctx.getSystemService(ShortcutManager::class.java) ?: return@runCatching
+        val list = Profiles.all(ctx).filter { it.name.isNotBlank() }
+        val max = sm.maxShortcutCountPerActivity.coerceAtMost(4)
+        sm.dynamicShortcuts = list.take(max).mapIndexed { i, p -> info(ctx, p).setRank(i).build() }
+        // Keep pinned icons in step with renamed types; disable those whose type was deleted.
+        val ids = list.map { "type-${it.id}" }.toSet()
+        sm.updateShortcuts(list.map { info(ctx, it).build() }.filter { s -> sm.pinnedShortcuts.any { it.id == s.id } })
+        val gone = sm.pinnedShortcuts.map { it.id }.filter { it.startsWith("type-") && it !in ids }
+        if (gone.isNotEmpty()) sm.disableShortcuts(gone, "This capture type was deleted")
+    }
+
+    fun pin(ctx: Context, p: CaptureProfile) {
+        val sm = ctx.getSystemService(ShortcutManager::class.java)
+        if (sm?.isRequestPinShortcutSupported != true) {
+            Toast.makeText(ctx, "Your home screen doesn't accept pinned icons", Toast.LENGTH_LONG).show(); return
+        }
+        sm.requestPinShortcut(info(ctx, p).build(), null)
+    }
+
+    private fun info(ctx: Context, p: CaptureProfile) = ShortcutInfo.Builder(ctx, "type-${p.id}")
+        .setShortLabel(p.name.ifBlank { "Talk" }).setLongLabel("${p.name}: start talking")
+        .setIcon(Icon.createWithAdaptiveBitmap(iconBitmap(ctx, p)))
+        .setIntent(CaptureActivity.intent(ctx, p.id, start = true).setAction(android.content.Intent.ACTION_VIEW))
+
+    /** Adaptive icon: the type's glyph on amber (private types on grey), like the widget buttons. */
+    private fun iconBitmap(ctx: Context, p: CaptureProfile): Bitmap {
+        val size = 216 // 108 dp at 2x; the launcher masks the outer part
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        c.drawColor((if (p.private) Ink.Raised else Ink.Amber).toArgb())
+        val d = ContextCompat.getDrawable(ctx, typeIcon(p.icon))!!.mutate()
+        d.colorFilter = PorterDuffColorFilter((if (p.private) Ink.TextStrong else Ink.OnAmber).toArgb(), PorterDuff.Mode.SRC_IN)
+        val g = 72; val o = (size - g) / 2
+        d.setBounds(o, o, o + g, o + g)
+        d.draw(c)
+        return bmp
+    }
+}

@@ -64,6 +64,18 @@
                 android:resource="@xml/widget_brain_info" />
         </receiver>
 
+        <!-- Long-press the widget → Edit widget: choose its buttons, edit capture types. -->
+        <activity
+            android:name=".ui.WidgetSetupActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.widgetsetup"
+            android:theme="@style/Theme.Capture">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <!-- Quick settings tile: talk from anywhere, the lock screen included. -->
         <service
             android:name=".ui.BrainTile"

@@ -8,4 +8,6 @@
     android:minResizeWidth="220dp" android:minResizeHeight="160dp"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
+    android:configure="org.brain.capture.ui.WidgetSetupActivity"
+    android:widgetFeatures="reconfigurable|configuration_optional"
     android:widgetCategory="home_screen" />

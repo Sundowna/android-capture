@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Screen 8 of the UX concepts: one button per capture type. Tap = start talking at once. -->
+<!-- Screen 8 of the UX concepts: up to four buttons, chosen in Settings → Capture types
+     (or long-press the widget → Edit widget). Tap = start talking at once. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:background="@drawable/w_bg" android:orientation="vertical" android:padding="16dp">
@@ -10,56 +11,60 @@
         <TextView android:id="@+id/widget_hint" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="Tap to talk" android:textColor="#FFC3C8CF" android:textSize="12sp" />
     </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+    <LinearLayout android:id="@+id/w_row1" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
         android:orientation="horizontal">
-        <LinearLayout android:id="@+id/w_btn_idea" android:layout_width="0dp" android:layout_height="match_parent"
-            android:layout_weight="1" android:background="@drawable/w_amber" android:orientation="vertical"
-            android:padding="14dp" android:clickable="true" android:focusable="true" android:contentDescription="Idea, tidy into bullets">
-            <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/w_idea"
-                android:importantForAccessibility="no" />
-            <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Idea"
-                android:textColor="#FF2A2118" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="tidy into bullets"
-                android:textColor="#D92A2118" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
-        </LinearLayout>
-        <FrameLayout android:layout_width="10dp" android:layout_height="match_parent" />
-        <LinearLayout android:id="@+id/w_btn_task" android:layout_width="0dp" android:layout_height="match_parent"
+        <LinearLayout android:id="@+id/w_slot1" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
-            android:padding="14dp" android:clickable="true" android:focusable="true" android:contentDescription="Task, checklist + due date">
-            <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/w_task"
-                android:importantForAccessibility="no" />
+            android:padding="14dp" android:clickable="true" android:focusable="true">
+            <ImageView android:id="@+id/w_icon1" android:layout_width="22dp" android:layout_height="22dp"
+                android:src="@drawable/t_idea" android:importantForAccessibility="no" />
             <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Task"
-                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="checklist + due date"
+            <TextView android:id="@+id/w_title1" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium"
+                android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/w_sub1" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="#FFC3C8CF" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
+        </LinearLayout>
+        <FrameLayout android:id="@+id/w_gap1" android:layout_width="10dp" android:layout_height="match_parent" />
+        <LinearLayout android:id="@+id/w_slot2" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
+            android:padding="14dp" android:clickable="true" android:focusable="true">
+            <ImageView android:id="@+id/w_icon2" android:layout_width="22dp" android:layout_height="22dp"
+                android:src="@drawable/t_idea" android:importantForAccessibility="no" />
+            <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+            <TextView android:id="@+id/w_title2" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium"
+                android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/w_sub2" android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:textColor="#FFC3C8CF" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
         </LinearLayout>
     </LinearLayout>
-    <FrameLayout android:layout_width="match_parent" android:layout_height="10dp" />
-    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+    <FrameLayout android:id="@+id/w_rowgap" android:layout_width="match_parent" android:layout_height="10dp" />
+    <LinearLayout android:id="@+id/w_row2" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
         android:orientation="horizontal">
-        <LinearLayout android:id="@+id/w_btn_open" android:layout_width="0dp" android:layout_height="match_parent"
+        <LinearLayout android:id="@+id/w_slot3" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
-            android:padding="14dp" android:clickable="true" android:focusable="true" android:contentDescription="Open Brain, notes and recent captures">
-            <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/w_open"
-                android:importantForAccessibility="no" />
+            android:padding="14dp" android:clickable="true" android:focusable="true">
+            <ImageView android:id="@+id/w_icon3" android:layout_width="22dp" android:layout_height="22dp"
+                android:src="@drawable/t_idea" android:importantForAccessibility="no" />
             <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Open Brain"
-                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="notes and recent captures"
+            <TextView android:id="@+id/w_title3" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium"
+                android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/w_sub3" android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:textColor="#FFC3C8CF" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
         </LinearLayout>
-        <FrameLayout android:layout_width="10dp" android:layout_height="match_parent" />
-        <LinearLayout android:id="@+id/w_btn_private" android:layout_width="0dp" android:layout_height="match_parent"
+        <FrameLayout android:id="@+id/w_gap2" android:layout_width="10dp" android:layout_height="match_parent" />
+        <LinearLayout android:id="@+id/w_slot4" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
-            android:padding="14dp" android:clickable="true" android:focusable="true" android:contentDescription="Private, stays on device">
-            <ImageView android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/w_private"
-                android:importantForAccessibility="no" />
+            android:padding="14dp" android:clickable="true" android:focusable="true">
+            <ImageView android:id="@+id/w_icon4" android:layout_width="22dp" android:layout_height="22dp"
+                android:src="@drawable/t_idea" android:importantForAccessibility="no" />
             <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Private"
-                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="stays on device"
+            <TextView android:id="@+id/w_title4" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="#FFEEF0F2" android:textSize="16sp" android:textStyle="bold" android:fontFamily="sans-serif-medium"
+                android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/w_sub4" android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:textColor="#FFC3C8CF" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
         </LinearLayout>
     </LinearLayout>

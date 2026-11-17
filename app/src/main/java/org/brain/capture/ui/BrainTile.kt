@@ -47,7 +47,7 @@ class BrainTile : TileService() {
         tile.subtitle = when {
             r != null && r.paused -> "Paused · tap to save"
             r != null -> "Recording · tap to save"
-            last != null -> BrainWidget.describe(last)
+            last != null -> BrainWidget.describe(this, last)
             else -> "Tap to talk"
         }
         tile.updateTile()
@@ -62,7 +62,7 @@ class BrainTile : TileService() {
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openCapture() {
-        val intent = CaptureActivity.intent(this, CaptureTypes.IDEA, start = true)
+        val intent = CaptureActivity.intent(this, org.brain.capture.types.Profiles.primary(this).id, start = true)
         if (Build.VERSION.SDK_INT >= 34) startActivityAndCollapse(
             PendingIntent.getActivity(this, 21, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         else @Suppress("DEPRECATION") startActivityAndCollapse(intent)
