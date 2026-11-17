@@ -129,13 +129,13 @@ object CleanupStep {
 
     /** Gemma's answer for [segments] with [profile]'s instruction, checked; one retry if sources are missing. */
     private suspend fun answer(ctx: Context, id: String, segments: List<String>, profile: org.brain.capture.types.CaptureProfile): CleanupText.Result {
-        val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, java.time.LocalDate.now().toString())
+        val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, java.time.LocalDate.now().toString(), profile.mixed)
         cleaning.value = id
         try {
-            var result = CleanupText.check(GemmaHolder.generate(ctx, prompt), segments)
+            var result = CleanupText.check(GemmaHolder.generate(ctx, prompt), segments, profile.mixed)
             if (result is CleanupText.Result.Rejected && result.retry)
                 result = CleanupText.check(GemmaHolder.generate(ctx, prompt +
-                    "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3]."), segments)
+                    "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3]."), segments, profile.mixed)
             return result
         } finally { cleaning.value = null }
     }
@@ -154,19 +154,19 @@ object CleanupStep {
         val t0 = SystemClock.elapsedRealtime()
         // The note's capture type decides the instruction (editable in Settings → Capture types).
         val profile = org.brain.capture.types.Profiles.get(ctx, owner.type)
-        val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, today)
+        val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, today, profile.mixed)
         var result: CleanupText.Result
         try {
             var answer = GemmaHolder.generate(ctx, prompt)
             Log.i(TAG, "Gemma answered for ${segments.size} segments:\n$answer")
-            result = CleanupText.check(answer, segments)
+            result = CleanupText.check(answer, segments, profile.mixed)
             // Nothing said to list (or every line made up): no retry, the note keeps the exact words.
             if (result is CleanupText.Result.Rejected && result.retry) {
                 // One more try with the rule spelled out; a second miss keeps the exact words.
                 Log.i(TAG, "Retrying after: ${result.reason}")
                 answer = GemmaHolder.generate(ctx, prompt + "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3].")
                 Log.i(TAG, "Second answer:\n$answer")
-                result = CleanupText.check(answer, segments)
+                result = CleanupText.check(answer, segments, profile.mixed)
             }
         } finally { cleaning.value = null }
         val ms = SystemClock.elapsedRealtime() - t0

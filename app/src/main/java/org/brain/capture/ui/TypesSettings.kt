@@ -165,13 +165,22 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
                 Profiles.default(p.id)?.let { d ->
                     if (d.instruction != p.instruction) TextButton(onClick = { p = p.copy(instruction = d.instruction) }) { Text("Reset to the original instruction") }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Checklist with due dates", fontSize = 15.sp, color = Ink.Text)
-                        Text("\"- [ ]\" tasks instead of bullets", fontSize = 12.sp, color = Ink.TextDim)
+                // How the clean version is laid out.
+                Text("Format", fontSize = 13.sp, color = Ink.TextDim)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Bullets" to (!p.checklist && !p.mixed), "Checklist" to p.checklist, "Text + lists" to p.mixed).forEach { (label, on) ->
+                        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (on) Ink.Amber else Ink.Raised)
+                            .clickable { p = p.copy(checklist = label == "Checklist", mixed = label == "Text + lists") }
+                            .heightIn(min = 40.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                            Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (on) Ink.OnAmber else Ink.TextSoft)
+                        }
                     }
-                    Switch(p.checklist, { p = p.copy(checklist = it) }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
                 }
+                Text(when {
+                    p.checklist -> "\"- [ ]\" tasks, with due dates when you say a day"
+                    p.mixed -> "Short paragraphs for connected thoughts, bullets for lists"
+                    else -> "One bullet per point"
+                }, fontSize = 12.sp, color = Ink.TextDim)
                 if (p.private) Text("Private: notes of this type stay inside the app and never go to the vault.", fontSize = 12.sp, color = Ink.Blue)
                 if (p.name.isNotBlank()) TextButton(onClick = { Shortcuts.pin(ctx, p) }) { Text("Add a one-tap icon to the home screen") }
                 if (canDelete) TextButton(onClick = { confirmDelete = true }) { Text("Delete this type", color = Ink.Error) }

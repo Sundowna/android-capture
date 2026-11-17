@@ -27,10 +27,11 @@ class CleanupProbeActivity : Activity() {
                 val t0 = SystemClock.elapsedRealtime()
                 // --es type c-fixfeature: that capture type's instruction (default Idea).
                 val p = org.brain.capture.types.Profiles.get(ctx, intent.getStringExtra("type") ?: "idea")
-                val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segs, p.instruction, p.checklist, java.time.LocalDate.now().toString()))
+                val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segs, p.instruction, p.checklist, java.time.LocalDate.now().toString(), p.mixed))
                 val ms = SystemClock.elapsedRealtime() - t0
+                Log.i(TAG, "Type ${p.id}: checklist=${p.checklist} mixed=${p.mixed}")
                 Log.i(TAG, "Answer after $ms ms (${segs.size} segments):\n$answer")
-                when (val r = CleanupText.check(answer, segs)) {
+                when (val r = CleanupText.check(answer, segs, p.mixed)) {
                     is CleanupText.Result.Ok -> Log.i(TAG, "ACCEPTED\n" + CleanupText.cleanBlock(r.bullets, segs))
                     is CleanupText.Result.Rejected -> Log.i(TAG, "REJECTED: ${r.reason}")
                 }

@@ -24,6 +24,8 @@ data class CaptureProfile(
     /** Stays on the phone: never written to the vault. Fixed when the type is created. */
     val private: Boolean,
     val onWidget: Boolean,
+    /** Short paragraphs and bullet lists mixed, as the content needs (not with [checklist]). */
+    val mixed: Boolean = false,
 ) {
     val builtIn: Boolean get() = id in Profiles.BUILT_IN
 }
@@ -60,6 +62,39 @@ Rules: start with who was there if it is said, then what was decided, then open 
 Remove filler words and repeats. Use only what the speaker said. Add no facts, names or conclusions.
 Keep the language of the transcript."""
 
+    /** The general cleaner: everything said, in order, minus the noise of speaking. */
+    const val VOICE_NOTE_INSTRUCTION = """Clean up this voice note so it reads well, without changing what it says.
+Rules: keep every point and keep the speaker's order.
+Write connected thoughts as short paragraphs, and lists, steps or separate items as bullet points.
+Remove filler words, false starts, repeats and sign-offs such as "okay" or "that is it"; when the speaker corrects themselves, keep only the corrected version.
+Keep words and remarks that change the meaning, such as not, maybe, only, almost, probably, or "not what I said before".
+Keep names, numbers, dates and examples exactly.
+When the speaker counts things ("one…, two…", "first…, then…"), write a short line saying what they are for, then each item as its own bullet without the counting word.
+Do not summarise or shorten the content. Add no facts, opinions or conclusions.
+Keep the language of the transcript."""
+
+    /**
+     * Earlier versions of built-in instructions. A stored type still holding one of them word for word
+     * was never edited by the user, so it gets the current text; edited ones are left alone.
+     */
+    private val OLD_INSTRUCTIONS = mapOf(
+        "c-voicenote" to listOf("""Clean up this voice note so it reads well, without changing what it says.
+Rules: keep every point and keep the speaker's order; one point per bullet.
+Remove filler words, false starts and repeats; when the speaker corrects themselves, keep only the corrected version.
+Keep words that change the meaning, such as not, maybe, only, almost, probably.
+Keep names, numbers, dates and examples exactly.
+When the speaker counts things ("one…, two…", "first…, then…"), give each its own bullet.
+Do not summarise or shorten the content. Add no facts, opinions or conclusions.
+Keep the language of the transcript.""", """Clean up this voice note so it reads well, without changing what it says.
+Rules: keep every point and keep the speaker's order; one point per bullet.
+Remove filler words, false starts, repeats and sign-offs such as "okay" or "that is it"; when the speaker corrects themselves, keep only the corrected version.
+Keep words and remarks that change the meaning, such as not, maybe, only, almost, probably, or "not what I said before".
+Keep names, numbers, dates and examples exactly.
+When the speaker counts things ("one…, two…", "first…, then…"), give each its own bullet without the counting word, starting with what they belong to, e.g. "Trip to Bern: book the train".
+Do not summarise or shorten the content. Add no facts, opinions or conclusions.
+Keep the language of the transcript."""),
+    )
+
     const val FIX_FEATURE_INSTRUCTION = """This voice note is about an app or a tool: things to fix and features to add.
 Rewrite it as a checklist. Start each line with "Fix: " for something broken or wrong, or "Feature: " for something new or better.
 Rules: one fix or feature per line; say what to change and where, using the speaker's own names for screens, buttons and apps; keep details such as numbers, names and steps.
@@ -86,6 +121,7 @@ Keep the language of the transcript."""
         CaptureProfile("c-fixfeature", "Fix / Feature", "sorted into fixes and features", "wrench", FIX_FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
         CaptureProfile("c-fix", "Fix", "what's broken, where", "bug", FIX_INSTRUCTION, checklist = true, private = false, onWidget = false),
         CaptureProfile("c-feature", "Feature", "what to add or change", "sparkle", FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
+        CaptureProfile("c-voicenote", "Voice note", "cleaned up, nothing left out", "mic", VOICE_NOTE_INSTRUCTION, checklist = false, private = false, onWidget = false, mixed = true),
     )
     private const val KEY_ADDED = "capture_profiles_added"
 
@@ -109,7 +145,15 @@ Keep the language of the transcript."""
         var list = raw?.let { runCatching { parse(it) }.getOrNull() }?.takeIf { it.isNotEmpty() } ?: DEFAULTS
         val seen = prefs(ctx).getStringSet(KEY_ADDED, emptySet())!!
         val missing = ADDED.filter { it.id !in seen }
-        if (missing.isNotEmpty()) {
+        // Untouched built-in instructions follow improvements to their default text.
+        val upgraded = list.map { p ->
+            val now = default(p.id)?.instruction
+            if (now != null && p.instruction != now && OLD_INSTRUCTIONS[p.id]?.contains(p.instruction) == true)
+                p.copy(instruction = now, mixed = default(p.id)?.mixed ?: p.mixed) else p
+        }
+        val changed = upgraded != list
+        list = upgraded
+        if (missing.isNotEmpty() || changed) {
             list = list + missing.filter { m -> list.none { it.id == m.id } }
             prefs(ctx).edit().putString(KEY, JSONArray(list.map(::toJson)).toString())
                 .putStringSet(KEY_ADDED, seen + missing.map { it.id }).apply()
@@ -178,13 +222,14 @@ Keep the language of the transcript."""
 
     private fun toJson(p: CaptureProfile) = JSONObject().put("id", p.id).put("name", p.name).put("subtitle", p.subtitle)
         .put("icon", p.icon).put("instruction", p.instruction).put("checklist", p.checklist)
-        .put("private", p.private).put("onWidget", p.onWidget)
+        .put("private", p.private).put("onWidget", p.onWidget).put("mixed", p.mixed)
 
     private fun parse(raw: String): List<CaptureProfile> {
         val a = JSONArray(raw)
         return (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
             CaptureProfile(o.getString("id"), o.optString("name"), o.optString("subtitle"), o.optString("icon", "star"),
-                o.optString("instruction", IDEA_INSTRUCTION), o.optBoolean("checklist"), o.optBoolean("private"), o.optBoolean("onWidget"))
+                o.optString("instruction", IDEA_INSTRUCTION), o.optBoolean("checklist"), o.optBoolean("private"), o.optBoolean("onWidget"),
+                o.optBoolean("mixed", default(o.getString("id"))?.mixed ?: false))
         }
     }
 }

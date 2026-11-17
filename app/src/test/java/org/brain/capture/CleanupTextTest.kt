@@ -73,6 +73,28 @@ class CleanupTextTest {
         assertTrue(r is Result.Rejected && !r.retry)
     }
 
+    @Test fun mixedKeepsParagraphsAndLists() {
+        val segs = listOf("I think the new widget is quite good but the font is maybe too small.",
+            "Three things for the trip to Bern: one, book the train, two, call Anna, three, pack the charger.")
+        val answer = "Title: Widget and trip\nThe new widget is quite good, but the font is maybe too small. [1]\n" +
+            "Three things for the trip to Bern:\n- Book the train [2]\n- Call Anna [2]\n- Pack the charger [2]"
+        assertTrue(CleanupText.check(answer, segs) is Result.Rejected) // bullets-only types still need bullets
+        val r = CleanupText.check(answer, segs, mixed = true) as Result.Ok
+        assertEquals(listOf(true, true, false, false, false), r.bullets.map { it.para })
+        assertEquals(listOf(2), r.bullets[1].refs) // the lead-in takes the list's sources
+        val stored = CleanupText.stored(r.title, r.bullets)
+        assertEquals("# Widget and trip\nThe new widget is quite good, but the font is maybe too small. [1]\n\n" +
+            "Three things for the trip to Bern: [2]\n\n- Book the train [2]\n- Call Anna [2]\n- Pack the charger [2]", stored)
+        assertEquals(r.bullets, CleanupText.bulletsFromStored(stored))
+        assertEquals("The new widget is quite good, but the font is maybe too small.\n\nThree things for the trip to Bern:\n\n" +
+            "• Book the train\n• Call Anna\n• Pack the charger", CleanupText.forDisplay(CleanupText.bulletLines(r.bullets)))
+    }
+
+    @Test fun mergesSeveralSourceGroups() {
+        val r = CleanupText.check("- Pack the charger [3] [4]", 4) as Result.Ok
+        assertEquals(Bullet("Pack the charger", listOf(3, 4)), r.bullets.single())
+    }
+
     @Test fun ignoresCodeFences() =
         assertTrue(CleanupText.check("```\n- Buy milk [1]\n```", 1) is Result.Ok)
 

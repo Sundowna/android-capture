@@ -17,6 +17,20 @@ First line: "Title: " and a short title of at most 8 words, made from the speake
 Then the bullet points only, one per line, each starting with "- ".
 If the transcript holds nothing to list, write only the title line. Never make up content."""
 
+    /** Paragraphs and bullets mixed; every paragraph is traceable like a bullet. */
+    private const val MIXED_RULES = """End every paragraph and every bullet with the transcript segment numbers it came from, e.g. [2,3].
+First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
+Then the text only. Sentences that belong together form a paragraph: one line of its own, with no "- " in front.
+Use "- " only for the items of a real list, each on its own line.
+Layout (placeholders, not content):
+Title: <title>
+<paragraph> [1,2]
+<what the list is for>: [3]
+- <item> [3]
+- <item> [3]
+<paragraph> [4]
+If the transcript holds nothing to keep, write only the title line. Never make up content."""
+
     private fun checklistRules(today: String) = """If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
 After each task, give the transcript segment numbers it came from, e.g. [2,3].
 First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
@@ -51,15 +65,16 @@ If the transcript holds nothing to list, write only the title line. Never make u
             checklist = type == "task", today = today)
 
     /** [instruction] is the type's own (editable) text; the fixed rules for its format follow it. */
-    fun prompt(segments: List<String>, instruction: String, checklist: Boolean, today: String): String = buildString {
+    fun prompt(segments: List<String>, instruction: String, checklist: Boolean, today: String, mixed: Boolean = false): String = buildString {
         appendLine(instruction.trim())
-        appendLine(if (checklist) checklistRules(today) else BULLET_RULES)
+        appendLine(when { checklist -> checklistRules(today); mixed -> MIXED_RULES; else -> BULLET_RULES })
         appendLine()
         appendLine("Transcript:")
         segments.forEachIndexed { i, s -> appendLine("[${i + 1}] $s") }
     }
 
-    data class Bullet(val text: String, val refs: List<Int>, val task: Boolean = false)
+    /** One line of the clean version: a bullet, a task, or (in the mixed format) a paragraph. */
+    data class Bullet(val text: String, val refs: List<Int>, val task: Boolean = false, val para: Boolean = false)
 
     sealed interface Result {
         data class Ok(val bullets: List<Bullet>, val title: String? = null) : Result
@@ -91,8 +106,8 @@ If the transcript holds nothing to list, write only the title line. Never make u
      * and the note keeps the exact words. In tests, 261 real cleaned lines scored 0.80 or more;
      * invented ones scored 0.
      */
-    fun check(answer: String, segments: List<String>): Result {
-        val r = check(answer, segments.size)
+    fun check(answer: String, segments: List<String>, mixed: Boolean = false): Result {
+        val r = check(answer, segments.size, mixed)
         if (r !is Result.Ok) return r
         val said = segments.flatMap(::words).map(::stem).toSet()
         val kept = r.bullets.filter { grounded(it.text, said) >= MIN_GROUNDED }
@@ -104,14 +119,15 @@ If the transcript holds nothing to list, write only the title line. Never make u
     private val TASK = Regex("""^\[[ xX]?]\s+(.*)$""")
     private val TITLE = Regex("""^(?:#+\s*)?\**(?:title|titel)\**\s*:\s*\**(.+?)\**$""", RegexOption.IGNORE_CASE)
     private val ADDED = Regex("""\*\*Added (\d{1,2}:\d{2})(?::\d{2})?([^*]*)\*\*""")
-    private val REFS = Regex("""\s*\[\s*(\d+(?:\s*[,–-]\s*\d+)*)\s*]\s*[.]?\s*$""")
+    /** The sources at the end of a line: "[2,3]", "[1-3]", or several groups such as "[3] [4]". */
+    private val REFS = Regex("""\s*((?:\[\s*\d+(?:\s*[,–-]\s*\d+)*\s*]\s*)+)[.]?\s*$""")
 
     /**
      * Reads the model's answer: an optional "Title:" first line (no sources needed, it only
      * names the note), then bullets or "- [ ]" tasks. Every bullet must end with segment numbers
      * that exist; otherwise the whole answer is rejected and the note keeps the raw transcript only.
      */
-    fun check(answer: String, segmentCount: Int): Result {
+    fun check(answer: String, segmentCount: Int, mixed: Boolean = false): Result {
         var lines = answer.replace("\r\n", "\n").lines().map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("```") }
         if (lines.isEmpty()) return Result.Rejected("empty answer")
@@ -119,9 +135,14 @@ If the transcript holds nothing to list, write only the title line. Never make u
         if (title != null) lines = lines.drop(1)
         if (lines.isEmpty()) return Result.Rejected("title only: nothing to list", retry = false)
         val bullets = ArrayList<Bullet>()
-        for (line in lines) {
-            var body = BULLET.find(line)?.groupValues?.get(1)
-                ?: return Result.Rejected("not a bullet: \"${line.take(60)}\"")
+        for ((n, line0) in lines.withIndex()) {
+            // A lead-in such as "Three things for the trip:" right before a list: it takes the list's sources.
+            val line = if (line0.endsWith(":") && !REFS.containsMatchIn(line0))
+                lines.getOrNull(n + 1)?.let { REFS.find(it) }?.let { line0 + " " + it.value.trim() } ?: line0 else line0
+            val bullet = BULLET.find(line)?.groupValues?.get(1)
+            // The mixed format: a line that is not a bullet is a paragraph, held to the same rules.
+            if (bullet == null && !mixed) return Result.Rejected("not a bullet: \"${line.take(60)}\"")
+            var body = bullet ?: line
             val task = TASK.find(body)?.groupValues?.get(1)
             if (task != null) body = task
             val m = REFS.find(body) ?: return Result.Rejected("bullet without segment numbers: \"${body.take(60)}\"")
@@ -130,12 +151,12 @@ If the transcript holds nothing to list, write only the title line. Never make u
                 return Result.Rejected("segment number out of range in \"${body.take(60)}\"")
             val text = body.substring(0, m.range.first).trim()
             if (text.isEmpty()) return Result.Rejected("bullet with numbers only")
-            bullets += Bullet(text, refs, task = task != null)
+            bullets += Bullet(text, refs, task = task != null, para = bullet == null)
         }
         return Result.Ok(bullets, title)
     }
 
-    private fun parseRefs(s: String): List<Int> = s.split(',').flatMap { part ->
+    private fun parseRefs(s: String): List<Int> = s.replace('[', ',').replace(']', ',').split(',').filter { it.isNotBlank() }.flatMap { part ->
         val r = part.split('-', '–').mapNotNull { it.trim().toIntOrNull() }
         when (r.size) {
             1 -> r
@@ -154,7 +175,7 @@ If the transcript holds nothing to list, write only the title line. Never make u
     }.trimEnd()
 
     /** The bullets of a stored clean version, as they were written into the note. */
-    fun bulletsFromStored(s: String): List<Bullet> = parseStored(s).filter { !it.title }.map { Bullet(it.text, it.refs, it.task) }
+    fun bulletsFromStored(s: String): List<Bullet> = parseStored(s).filter { !it.title }.map { Bullet(it.text, it.refs, it.task, it.para) }
 
     /**
      * The note with one clean block swapped for another (cleaning again with a different type).
@@ -178,9 +199,17 @@ If the transcript holds nothing to list, write only the title line. Never make u
         return lines.joinToString("\n") + "\n---\n" + body
     }
 
-    /** The bullets alone, one per line, each ending with its sources: "- text [1,2]" or "- [ ] text [3]". */
-    fun bulletLines(bullets: List<Bullet>): String =
-        bullets.joinToString("\n") { "- ${if (it.task) "[ ] " else ""}${it.text} [${it.refs.joinToString(",")}]" }
+    /**
+     * The lines alone, each ending with its sources: "- text [1,2]", "- [ ] text [3]", or a paragraph
+     * "text [4,5]". Paragraphs stand apart from their neighbours by a blank line, as Markdown needs.
+     */
+    fun bulletLines(bullets: List<Bullet>): String = buildString {
+        bullets.forEachIndexed { i, b ->
+            if (i > 0) append(if (b.para || bullets[i - 1].para) "\n\n" else "\n")
+            val refs = " [${b.refs.joinToString(",")}]"
+            append(if (b.para) b.text + refs else "- ${if (b.task) "[ ] " else ""}${b.text}$refs")
+        }
+    }
 
     /** What the app keeps for the capture screen and cards: "# Title" (if any), then the bullets. */
     fun stored(title: String?, bullets: List<Bullet>): String =
@@ -205,6 +234,8 @@ If the transcript holds nothing to list, write only the title line. Never make u
                 t.startsWith("- [ ] ") -> "☐ " + t.removePrefix("- [ ] ").replace(REFS, "")
                 t.startsWith("- [x] ") -> "☑ " + t.removePrefix("- [x] ").replace(REFS, "")
                 t.startsWith("- ") -> "• " + t.removePrefix("- ").replace(REFS, "")
+                // A cleaned paragraph: its sources hidden like a bullet's.
+                !t.startsWith(">") && !t.startsWith("#") && REFS.containsMatchIn(t) -> t.replace(REFS, "")
                 else -> line
             }
         }
@@ -213,21 +244,22 @@ If the transcript holds nothing to list, write only the title line. Never make u
 
     /** [stored] text as plain lines for a card: the title, then "• " bullets or "☐ " tasks. */
     fun storedForDisplay(s: String): String = parseStored(s).joinToString("\n") {
-        when { it.title -> it.text; it.task -> "☐ ${it.text}"; else -> "• ${it.text}" }
+        when { it.title -> it.text; it.task -> "☐ ${it.text}"; it.para -> it.text; else -> "• ${it.text}" }
     }
 
-    /** A line of [stored] text, ready to show: its sources, and whether it is a title or task. */
-    data class Line(val text: String, val refs: List<Int>, val title: Boolean = false, val task: Boolean = false)
+    /** A line of [stored] text, ready to show: its sources, and whether it is a title, task or paragraph. */
+    data class Line(val text: String, val refs: List<Int>, val title: Boolean = false, val task: Boolean = false, val para: Boolean = false)
 
     fun parseStored(s: String): List<Line> = s.lines().filter { it.isNotBlank() }.map { l ->
         when {
             l.startsWith("# ") -> Line(l.removePrefix("# ").trim(), emptyList(), title = true)
             else -> {
+                val para = !l.startsWith("- ")
                 var body = l.removePrefix("- ")
-                val task = body.startsWith("[ ] ").also { if (it) body = body.removePrefix("[ ] ") }
+                val task = !para && body.startsWith("[ ] ").also { if (it) body = body.removePrefix("[ ] ") }
                 val m = REFS.find(body)
                 Line(if (m != null) body.substring(0, m.range.first).trim() else body.trim(),
-                    m?.let { parseRefs(it.groupValues[1]) } ?: emptyList(), task = task)
+                    m?.let { parseRefs(it.groupValues[1]) } ?: emptyList(), task = task, para = para)
             }
         }
     }

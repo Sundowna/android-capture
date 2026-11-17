@@ -641,13 +641,14 @@ private fun CleanView(clean: String, transcript: String, showTitle: Boolean) {
     var open by remember(clean) { mutableStateOf<Int?>(null) }
     lines.forEachIndexed { i, l ->
         if (l.title) { if (showTitle) Text(l.text, fontFamily = Grotesk, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, lineHeight = 25.sp, color = Ink.Text) }
-        else Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+        // A paragraph gets a little air above it, so it reads as one apart from a list.
+        else Column(Modifier.fillMaxWidth().padding(top = if (l.para && i > 0) 6.dp else 0.dp).clip(RoundedCornerShape(8.dp))
             .clickable { open = if (open == i) null else i }
             .semantics { contentDescription = "${l.text}. Tap to show the exact words." }
             .padding(vertical = 2.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (l.task) Box(Modifier.padding(top = 4.dp).size(16.dp).border(1.5.dp, Ink.TextDim, RoundedCornerShape(4.dp)))
-                else Box(Modifier.padding(top = 9.dp).size(5.dp).clip(CircleShape).background(Ink.TextBody))
+                else if (!l.para) Box(Modifier.padding(top = 9.dp).size(5.dp).clip(CircleShape).background(Ink.TextBody))
                 Text(l.text, fontSize = 15.sp, lineHeight = 23.sp, color = Ink.TextBody, modifier = Modifier.weight(1f))
             }
             if (open == i) {
