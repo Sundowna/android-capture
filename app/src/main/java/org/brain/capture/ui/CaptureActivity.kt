@@ -181,6 +181,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val levelState = CaptureState.level.collectAsState()
     val level = remember { { levelState.value } }
     val cleaningId by CleanupStep.cleaning.collectAsState()
+    val recleanUndo by CleanupStep.lastReclean.collectAsState()
 
     var mode by rememberSaveable { mutableStateOf(request?.mode ?: CaptureActivity.MODE_VOICE) }
     // The capture type ("agent"): one for the Open zone, one for the Private zone (Settings → Capture types).
@@ -297,8 +298,17 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
                     ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
                     Spacer(Modifier.weight(1f))
-                    if (zoneTypes.size > 1 && (note == null || recordingHere && recording?.appendTo == null))
+                    val n = note
+                    if (zoneTypes.size > 1 && (n == null || recordingHere && recording?.appendTo == null))
                         TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
+                    else if (n != null && n.kind == "voice" && n.state == CaptureStates.SAVED && recording == null &&
+                        !noteBusy && !undone && gemmaInstalled && !n.transcript.isNullOrBlank())
+                        // Finished note: pick a type (or the same one) and it is cleaned again with that instruction.
+                        TypeChip(n.type, profiles.orEmpty().filter { it.private == n.isPrivate }, again = true) { t ->
+                            if (n.isPrivate) privateKind = t else kind = t
+                            userPickedView = true; view = View.Clean
+                            org.brain.capture.share.AppScope.launch { CleanupStep.reclean(ctx, n.id, t) }
+                        }
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -318,6 +328,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     )
                     else -> TextCard(mode, private, type, onSaved = { c ->
                         noteId = c.id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
+                        if (c.id !in watched) watched += c.id // typed here: Undo can take it back
                     })
                 }
             }
@@ -348,7 +359,9 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 Controls(
                     recordingHere = recordingHere, paused = recording?.paused == true,
                     elapsedMs = { if (recordingHere) recording?.elapsedMs() ?: 0 else ((last?.audioSeconds ?: 0.0) * 1000).toLong() },
-                    canUndo = !recordingHere && additions.isEmpty() && note?.state == CaptureStates.SAVED && !undone,
+                    // Undo only takes back what was just done here: a re-clean, or a recording or note made on this screen.
+                    canUndo = recording == null && !noteBusy && !undone && note?.state == CaptureStates.SAVED &&
+                        (recleanUndo?.noteId == noteId || (additions.lastOrNull()?.id ?: noteId) in watched),
                     level = level, buttonModifier = buttonModifier,
                     onRecord = {
                         when {
@@ -365,8 +378,19 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     },
                     onUndo = {
                         val c = note ?: return@Controls
-                        undone = true
-                        scope.launch { runCatching { Notes.delete(ctx, c) } }
+                        val lastAddition = additions.lastOrNull()
+                        when {
+                            // 1. A re-clean: back to the previous type and clean version.
+                            recleanUndo?.noteId == c.id -> scope.launch { CleanupStep.undoReclean(ctx) }
+                            // 2. An addition: that part comes out of the note again.
+                            lastAddition != null && lastAddition.id in watched -> scope.launch {
+                                runCatching { Notes.deleteAddition(ctx, lastAddition) }.onFailure {
+                                    android.widget.Toast.makeText(ctx, it.message ?: "Could not undo", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            // 3. A new note: it goes to the vault's .trash (private ones are deleted).
+                            c.id in watched -> { undone = true; scope.launch { runCatching { Notes.delete(ctx, c) } } }
+                        }
                     },
                 )
             }
@@ -419,7 +443,7 @@ private fun ViewTab(label: String, sub: String, on: Boolean, onClick: () -> Unit
 
 /** The capture type for this note; a tap opens the list (Settings → Capture types edits them). */
 @Composable
-private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, onPick: (String) -> Unit) {
+private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, again: Boolean = false, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val current = types.firstOrNull { it.id == selected } ?: types.first()
     Box {
@@ -431,6 +455,7 @@ private fun TypeChip(selected: String, types: List<org.brain.capture.types.Captu
             Text("${current.name} ▾", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextDim)
         }
         androidx.compose.material3.DropdownMenu(open, { open = false }, containerColor = Ink.Panel) {
+            if (again) Text("Clean again as…", fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
             types.forEach { t ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Column {

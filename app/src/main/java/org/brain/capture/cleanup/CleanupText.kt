@@ -117,6 +117,31 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
         segments.forEachIndexed { i, s -> appendLine("> [${i + 1}] $s") }
     }.trimEnd()
 
+    /** The bullets of a stored clean version, as they were written into the note. */
+    fun bulletsFromStored(s: String): List<Bullet> = parseStored(s).filter { !it.title }.map { Bullet(it.text, it.refs, it.task) }
+
+    /**
+     * The note with one clean block swapped for another (cleaning again with a different type).
+     * Null unless [old] stands in the note exactly once, as the app wrote it: an edited note is left alone.
+     */
+    fun replaceBlock(note: String, old: String, new: String): String? {
+        val i = note.indexOf(old)
+        if (old.isBlank() || i < 0 || note.indexOf(old, i + 1) >= 0) return null
+        return note.substring(0, i) + new + note.substring(i + old.length)
+    }
+
+    /** Sets `capture_type: <type>` in the frontmatter; the default type (Idea) has no line. */
+    fun withCaptureType(note: String, type: String): String {
+        val (front, body) = NoteText.split(note)
+        if (front.isEmpty()) return note
+        val lines = front.removeSuffix("---\n").lines().filter { it.isNotEmpty() && !it.startsWith("capture_type:") }.toMutableList()
+        if (type != "idea") {
+            val at = lines.indexOfFirst { it.startsWith("source:") }.let { if (it < 0) lines.size else it + 1 }
+            lines.add(at, "capture_type: $type")
+        }
+        return lines.joinToString("\n") + "\n---\n" + body
+    }
+
     /** The bullets alone, one per line, each ending with its sources: "- text [1,2]" or "- [ ] text [3]". */
     fun bulletLines(bullets: List<Bullet>): String =
         bullets.joinToString("\n") { "- ${if (it.task) "[ ] " else ""}${it.text} [${it.refs.joinToString(",")}]" }

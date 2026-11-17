@@ -121,6 +121,39 @@ class CleanupTextTest {
             CleanupText.forDisplay(listOf("**Added 20:28:14 · shared from Files**", "", "![[x.pdf]]").joinToString("\n")).lines())
     }
 
+    @Test fun recleanSwapsBlockAndType() {
+        val words = "Uh buy milk. And, uh, call mum."
+        val segs = CleanupText.segments(words)
+        val oldClean = CleanupText.stored("Shopping", listOf(Bullet("Buy milk", listOf(1)), Bullet("Call mum", listOf(2))))
+        val cleaned = CleanupText.rewrite(note, words, CleanupText.cleanBlock(CleanupText.bulletsFromStored(oldClean), segs), "g")!!
+        val newBlock = CleanupText.cleanBlock(listOf(Bullet("Buy milk", listOf(1), task = true), Bullet("Call mum", listOf(2), task = true)), segs)
+        val oldBlock = CleanupText.cleanBlock(CleanupText.bulletsFromStored(oldClean), segs)
+        val swapped = CleanupText.replaceBlock(cleaned, oldBlock, newBlock)!!
+        assertTrue(swapped.contains("- [ ] Buy milk [1]\n- [ ] Call mum [2]"))
+        assertTrue(swapped.contains("> [1] Uh buy milk."))
+        val typed = CleanupText.withCaptureType(swapped, "task")
+        assertEquals("abc", NoteText.captureId(typed))
+        assertTrue(NoteText.split(typed).first.contains("source: voice\ncapture_type: task"))
+        assertEquals(1, Regex("(?m)^capture_type:").findAll(CleanupText.withCaptureType(typed, "task")).count())
+        assertTrue(!CleanupText.withCaptureType(typed, "idea").contains("capture_type"))
+        // An edited block is not found: the note is left alone.
+        assertNull(CleanupText.replaceBlock(cleaned.replace("Call mum", "Call Mum"), oldBlock, newBlock))
+    }
+
+    @Test fun undoTakesOutAddition() {
+        val base = note.trimEnd()
+        val a1 = NoteBuilder.appendBlock(OffsetDateTime.of(2026, 11, 16, 9, 1, 0, 0, ZoneOffset.UTC), "First addition.", "b.ogg", null)
+        val a2 = NoteBuilder.appendBlock(OffsetDateTime.of(2026, 11, 16, 9, 2, 0, 0, ZoneOffset.UTC), "Second addition.", "c.ogg", null)
+        val full = base + "\n" + a1 + a2
+        val withoutLast = NoteText.withoutAddition(full, "09:02:00")!!
+        assertTrue(withoutLast.contains("First addition."))
+        assertTrue(!withoutLast.contains("Second addition.") && !withoutLast.contains("c.ogg"))
+        val withoutFirst = NoteText.withoutAddition(full, "09:01:00")!!
+        assertTrue(!withoutFirst.contains("First addition.") && withoutFirst.contains("Second addition."))
+        assertTrue(withoutFirst.startsWith("---"))
+        assertNull(NoteText.withoutAddition(full, "09:03:00"))
+    }
+
     @Test fun leavesEditedNoteAlone() =
         assertNull(CleanupText.rewrite(note.replace("call mum", "call Mum"), "Uh buy milk. And, uh, call mum.", "x", "m"))
 }

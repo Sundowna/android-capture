@@ -123,6 +123,11 @@ interface CaptureDao {
     @Query("UPDATE captures SET cleanup = :result WHERE id = :id") suspend fun setCleanup(id: String, result: String)
     @Query("UPDATE captures SET clean = :clean WHERE id = :id") suspend fun setClean(id: String, clean: String)
     @Query("UPDATE captures SET type = :type WHERE id = :id") suspend fun setType(id: String, type: String)
+    /** Forgets the clean version, so the screen shows "Cleaning" while a new one is made. */
+    @Query("UPDATE captures SET clean = NULL, cleanup = NULL WHERE id = :id") suspend fun clearClean(id: String)
+    /** Puts back a clean version (e.g. when a re-clean with another type did not pass the check). */
+    @Query("UPDATE captures SET clean = :clean, cleanup = :cleanup WHERE id = :id")
+    suspend fun restoreClean(id: String, clean: String?, cleanup: String?)
     /** The note a share is added to; kept on the row so a retry adds it to the same note. */
     @Query("UPDATE captures SET appendTo = :target WHERE id = :id") suspend fun setAppendTo(id: String, target: String)
     /** Notes a share can be added to: saved, in the vault (not private), most recently active first. */

@@ -180,6 +180,33 @@ object Notes {
      * vault's `.trash` folder, and the app forgets the capture. Embeds the user added in Obsidian
      * are left alone, since other notes may use them.
      */
+    /**
+     * Undo for an addition: its "Added 21:50:39" section comes out of the note (only if it is still
+     * there as the app wrote it), its recording goes to the vault's .trash, and the app forgets it.
+     */
+    suspend fun deleteAddition(ctx: Context, a: Capture) = withContext(Dispatchers.IO) {
+        val dao = CaptureDb.get(ctx).dao()
+        val owner = a.appendTo?.let { dao.get(it) } ?: error("Note not found")
+        val vault = vault(ctx)
+        val path = locate(ctx, vault, owner) ?: throw VaultUnavailableException("Note not found")
+        val note = vault.read(path) ?: throw VaultUnavailableException("Note not found")
+        val at = OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(a.createdAt), java.time.ZoneId.systemDefault())
+        val updated = NoteText.withoutAddition(note, at.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.ROOT)))
+            ?: error("This addition was changed in the note, so it was left as it is")
+        dao.putEdit(PendingEdit(owner.id, path, note, updated))
+        vault.overwrite(path, updated)
+        dao.clearEdit(owner.id)
+        a.audioVaultName?.let { name ->
+            val folder = path.substringBeforeLast('/', "")
+            listOf("$folder/Attachments/$name", "$folder/$name", "${Prefs(ctx).inboxFolder}/Attachments/$name")
+                .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
+        }
+        dao.deleteWithAdditions(a.id)
+        dao.touch(owner.id, System.currentTimeMillis())
+        cache.remove(owner.id)
+        Log.i(TAG, "Took back addition ${a.id} from $path")
+    }
+
     suspend fun delete(ctx: Context, c: Capture) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
         if (c.isPrivate) {
