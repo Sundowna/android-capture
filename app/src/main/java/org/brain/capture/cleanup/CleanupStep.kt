@@ -130,10 +130,10 @@ object CleanupStep {
         val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, java.time.LocalDate.now().toString())
         cleaning.value = id
         try {
-            var result = CleanupText.check(GemmaHolder.generate(ctx, prompt), segments.size)
-            if (result is CleanupText.Result.Rejected)
+            var result = CleanupText.check(GemmaHolder.generate(ctx, prompt), segments)
+            if (result is CleanupText.Result.Rejected && result.retry)
                 result = CleanupText.check(GemmaHolder.generate(ctx, prompt +
-                    "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3]."), segments.size)
+                    "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3]."), segments)
             return result
         } finally { cleaning.value = null }
     }
@@ -157,13 +157,14 @@ object CleanupStep {
         try {
             var answer = GemmaHolder.generate(ctx, prompt)
             Log.i(TAG, "Gemma answered for ${segments.size} segments:\n$answer")
-            result = CleanupText.check(answer, segments.size)
-            if (result is CleanupText.Result.Rejected) {
+            result = CleanupText.check(answer, segments)
+            // Nothing said to list (or every line made up): no retry, the note keeps the exact words.
+            if (result is CleanupText.Result.Rejected && result.retry) {
                 // One more try with the rule spelled out; a second miss keeps the exact words.
                 Log.i(TAG, "Retrying after: ${result.reason}")
                 answer = GemmaHolder.generate(ctx, prompt + "\nImportant: end EVERY line with its segment numbers in square brackets, e.g. [3].")
                 Log.i(TAG, "Second answer:\n$answer")
-                result = CleanupText.check(answer, segments.size)
+                result = CleanupText.check(answer, segments)
             }
         } finally { cleaning.value = null }
         val ms = SystemClock.elapsedRealtime() - t0

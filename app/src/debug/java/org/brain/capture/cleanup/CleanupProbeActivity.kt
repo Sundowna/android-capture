@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Debug-only test hook, no vault needed:
- * adb shell am start -n org.brain.capture.play/org.brain.capture.cleanup.CleanupProbeActivity --es text "…"
+ * adb shell am start -n org.brain.capture.play/org.brain.capture.cleanup.CleanupProbeActivity --es text "…" [--es type c-fixfeature]
  * then read `adb logcat -s CleanupProbe Gemma`.
  */
 class CleanupProbeActivity : Activity() {
@@ -25,10 +25,12 @@ class CleanupProbeActivity : Activity() {
                 Log.i(TAG, "Model: ${GemmaHolder.modelFile(ctx)}")
                 val segs = CleanupText.segments(text)
                 val t0 = SystemClock.elapsedRealtime()
-                val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segs))
+                // --es type c-fixfeature: that capture type's instruction (default Idea).
+                val p = org.brain.capture.types.Profiles.get(ctx, intent.getStringExtra("type") ?: "idea")
+                val answer = GemmaHolder.generate(ctx, CleanupText.prompt(segs, p.instruction, p.checklist, java.time.LocalDate.now().toString()))
                 val ms = SystemClock.elapsedRealtime() - t0
                 Log.i(TAG, "Answer after $ms ms (${segs.size} segments):\n$answer")
-                when (val r = CleanupText.check(answer, segs.size)) {
+                when (val r = CleanupText.check(answer, segs)) {
                     is CleanupText.Result.Ok -> Log.i(TAG, "ACCEPTED\n" + CleanupText.cleanBlock(r.bullets, segs))
                     is CleanupText.Result.Rejected -> Log.i(TAG, "REJECTED: ${r.reason}")
                 }

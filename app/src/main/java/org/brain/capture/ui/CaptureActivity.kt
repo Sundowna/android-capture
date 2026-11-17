@@ -123,7 +123,16 @@ class CaptureActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) request.value = intent.toRequest()
-        setContent { CaptureTheme { CaptureScreen(request.value, onClose = { finish() }) } }
+        // The chevron is "up", not "back": it goes to the app's notes list, not to whatever was
+        // open before the widget or tile (usually the phone's home screen). System back still leaves.
+        setContent { CaptureTheme { CaptureScreen(request.value, onClose = { goHome() }) } }
+    }
+
+    private fun goHome() {
+        startActivity(Intent(this, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_HOME, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
     }
 
     override fun onNewIntent(intent: Intent) {

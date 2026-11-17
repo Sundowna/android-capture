@@ -84,6 +84,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
 import org.brain.capture.Prefs
@@ -98,23 +100,32 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private val retryRequest = mutableStateOf(false)
+    /** Bumped when the capture screen's chevron asks for the notes list. */
+    private val homeRequest = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         retryRequest.value = intent.getBooleanExtra(CaptureService.EXTRA_RETRY, false)
-        setContent { CaptureTheme { App(retryRequest) } }
+        if (intent.getBooleanExtra(EXTRA_HOME, false)) homeRequest.intValue = 1
+        setContent { CaptureTheme { App(retryRequest, homeRequest) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(CaptureService.EXTRA_RETRY, false)) retryRequest.value = true
+        if (intent.getBooleanExtra(EXTRA_HOME, false)) homeRequest.intValue++
+    }
+
+    companion object {
+        /** Open on the notes list (not a recording or settings): the capture screen's chevron. */
+        const val EXTRA_HOME = "home"
     }
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-private fun App(retryRequest: MutableState<Boolean>) {
+private fun App(retryRequest: MutableState<Boolean>, homeRequest: androidx.compose.runtime.MutableIntState) {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
     var showSettings by remember { mutableStateOf(false) }
@@ -124,7 +135,9 @@ private fun App(retryRequest: MutableState<Boolean>) {
     var capture by remember { mutableStateOf<CaptureRequest?>(null) }
     val recording by CaptureState.recording.collectAsState()
     // Opening the app while something records shows that recording.
-    LaunchedEffect(Unit) { if (CaptureState.isRecording) capture = CaptureRequest() }
+    LaunchedEffect(Unit) { if (CaptureState.isRecording && homeRequest.intValue == 0) capture = CaptureRequest() }
+    // Arriving from the capture screen's chevron: show the notes list.
+    LaunchedEffect(homeRequest.intValue) { if (homeRequest.intValue > 0) { capture = null; showSettings = false } }
     BackHandler(enabled = capture != null) { capture = null }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -167,7 +180,24 @@ private fun HomeScreen(
     val level = remember { { levelState.value } }
     val live by CaptureState.live.collectAsState()
     var limit by remember { mutableIntStateOf(prefs.cardCount) }
-    val cards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
+    val allCards by remember(limit) { dao.cards(limit) }.collectAsState(emptyList())
+    // Cards swiped away are hidden while their Undo bar shows; the note is deleted after that.
+    val swiped by SwipeDeletes.hidden.collectAsState()
+    val cards = allCards.filter { it.id !in swiped }
+    val snackbar = remember { SnackbarHostState() }
+    val snackScope = rememberCoroutineScope()
+    fun swipeDelete(c: org.brain.capture.data.Capture) {
+        SwipeDeletes.start(ctx, c)
+        snackScope.launch {
+            snackbar.currentSnackbarData?.dismiss() // a newer swipe replaces the bar; the older delete goes ahead
+            // The bar stays just as long as Undo can still stop the delete.
+            val r = kotlinx.coroutines.withTimeoutOrNull(SwipeDeletes.UNDO_MS - 300) {
+                snackbar.showSnackbar(if (c.isPrivate) "Private note deleted" else "Note moved to the vault's .trash",
+                    actionLabel = "Undo", duration = SnackbarDuration.Indefinite)
+            }
+            if (r == SnackbarResult.ActionPerformed) SwipeDeletes.undo(c.id)
+        }
+    }
     val total by remember { dao.cardCount() }.collectAsState(0)
     val pendingRows by remember { dao.inProgress() }.collectAsState(emptyList())
     // Only recordings whose audio still exists, and not the one being recorded right now.
@@ -277,9 +307,11 @@ private fun HomeScreen(
             items(cards, key = { it.id }) { c ->
                 val justSaved = saved?.captureId == c.id && now < highlightUntil
                 Box(Modifier.animateItem()) {
-                    NoteCard(c, refresh, justSaved, canRecord,
-                        onRecordMore = { onCapture(CaptureRequest(start = true, noteId = it.id)) },
-                        onOpen = { onCapture(CaptureRequest(noteId = it.id)) })
+                    SwipeToDelete(onDelete = { swipeDelete(c) }) {
+                        NoteCard(c, refresh, justSaved, canRecord,
+                            onRecordMore = { onCapture(CaptureRequest(start = true, noteId = it.id)) },
+                            onOpen = { onCapture(CaptureRequest(noteId = it.id)) })
+                    }
                 }
             }
             if (cards.isEmpty() && pending.isEmpty()) item("empty") {
@@ -294,6 +326,11 @@ private fun HomeScreen(
                     }
                 }
             }
+        }
+
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            androidx.compose.material3.Snackbar(it, shape = RoundedCornerShape(14.dp), containerColor = Ink.Raised,
+                contentColor = Ink.Text, actionColor = Ink.Amber)
         }
 
         // The small recording bar: slides down from the top once the big button has scrolled away.

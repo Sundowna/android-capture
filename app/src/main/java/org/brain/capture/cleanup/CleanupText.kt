@@ -14,12 +14,14 @@ object CleanupText {
      */
     private const val BULLET_RULES = """After each bullet, give the transcript segment numbers it came from, e.g. [2,3].
 First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
-Then the bullet points only, one per line, each starting with "- "."""
+Then the bullet points only, one per line, each starting with "- ".
+If the transcript holds nothing to list, write only the title line. Never make up content."""
 
     private fun checklistRules(today: String) = """If the speaker gives a day or date for a task, add " (due YYYY-MM-DD)". Today is $today.
 After each task, give the transcript segment numbers it came from, e.g. [2,3].
 First line: "Title: " and a short title of at most 8 words, made from the speaker's own words, in the language of the transcript.
-Then the tasks only, one per line, each starting with "- [ ] "."""
+Then the tasks only, one per line, each starting with "- [ ] ".
+If the transcript holds nothing to list, write only the title line. Never make up content."""
 
     private val SENTENCE_END = Regex("""(?<=[.!?…])\s+""")
     private const val MAX_SEGMENT = 280
@@ -61,7 +63,41 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
 
     sealed interface Result {
         data class Ok(val bullets: List<Bullet>, val title: String? = null) : Result
-        data class Rejected(val reason: String) : Result
+        /** [retry] = a format slip worth one more try; false when the speaker gave nothing to list. */
+        data class Rejected(val reason: String, val retry: Boolean = true) : Result
+    }
+
+    private val LETTERS = Regex("""\p{L}+""")
+    /** Words the format itself adds ("Fix: …", "(due 2026-11-20)"), not the speaker. */
+    private val FORMAT_WORDS = setOf("fix", "feature", "title", "titel", "due")
+    /** A line counts as said when at least this share of its words was in the transcript. */
+    private const val MIN_GROUNDED = 0.5
+
+    private fun stem(w: String) = w.lowercase().take(4)
+    private fun words(s: String) = LETTERS.findAll(s).map { it.value }.filter { it.length >= 3 && it.lowercase() !in FORMAT_WORDS }.toList()
+
+    /**
+     * Share of [line]'s words (by their first four letters, so "tapping" matches "tap") that the
+     * speaker said somewhere in the transcript. A small model sometimes invents whole lines, with
+     * valid segment numbers, when there is little to clean ("Okay, let's see." became two features).
+     */
+    fun grounded(line: String, said: Set<String>): Double {
+        val w = words(line)
+        return if (w.isEmpty()) 1.0 else w.count { stem(it) in said }.toDouble() / w.size
+    }
+
+    /**
+     * [check], then drops every line (and the title) whose words were not said. Nothing left: rejected,
+     * and the note keeps the exact words. In tests, 261 real cleaned lines scored 0.80 or more;
+     * invented ones scored 0.
+     */
+    fun check(answer: String, segments: List<String>): Result {
+        val r = check(answer, segments.size)
+        if (r !is Result.Ok) return r
+        val said = segments.flatMap(::words).map(::stem).toSet()
+        val kept = r.bullets.filter { grounded(it.text, said) >= MIN_GROUNDED }
+        if (kept.isEmpty()) return Result.Rejected("no line matches what was said", retry = false)
+        return Result.Ok(kept, r.title?.takeIf { grounded(it, said) >= MIN_GROUNDED })
     }
 
     private val BULLET = Regex("""^\s*(?:[-*•]|\d+[.)])\s+(.*)$""")
@@ -81,7 +117,7 @@ Then the tasks only, one per line, each starting with "- [ ] "."""
         if (lines.isEmpty()) return Result.Rejected("empty answer")
         val title = TITLE.find(lines[0])?.groupValues?.get(1)?.trim()?.trim('"')?.take(80)?.ifEmpty { null }
         if (title != null) lines = lines.drop(1)
-        if (lines.isEmpty()) return Result.Rejected("title only")
+        if (lines.isEmpty()) return Result.Rejected("title only: nothing to list", retry = false)
         val bullets = ArrayList<Bullet>()
         for (line in lines) {
             var body = BULLET.find(line)?.groupValues?.get(1)

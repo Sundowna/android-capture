@@ -46,6 +46,33 @@ class CleanupTextTest {
     @Test fun rejectsProse() =
         assertTrue(CleanupText.check("Here is the cleaned note:\n- Buy milk [1]", 1) is Result.Rejected)
 
+    // 2026-11-17: "Okay, let's see." came back as two invented Fix / Feature lines.
+    @Test fun rejectsInventedLines() {
+        val r = CleanupText.check("Title: Settings and profile changes\n" +
+            "- [ ] Fix: Change the text on the \"Settings\" button to \"Configure Settings\" on the Settings screen [1]\n" +
+            "- [ ] Feature: Add a new option to the \"Profile\" screen to edit the user's display name [1]", listOf("Okay, let's see."))
+        assertTrue(r is Result.Rejected && !r.retry)
+    }
+
+    @Test fun dropsOnlyTheInventedLine() {
+        val segs = listOf("Okay, let's see.", "Tapping the chevron on the note screen takes me to the phone's home screen.")
+        val r = CleanupText.check("Title: Chevron goes home\n" +
+            "- [ ] Fix: Tapping the chevron on the note screen goes to the phone's home screen [2]\n" +
+            "- [ ] Feature: Add dark mode to the settings page [1]", segs) as Result.Ok
+        assertEquals(listOf("Fix: Tapping the chevron on the note screen goes to the phone's home screen"), r.bullets.map { it.text })
+        assertEquals("Chevron goes home", r.title)
+    }
+
+    @Test fun keepsParaphraseAndDueDates() {
+        val r = CleanupText.check("- [ ] Call the dentist (due 2026-11-20) [1]", listOf("I need to call my dentist on Friday."))
+        assertTrue(r is Result.Ok)
+    }
+
+    @Test fun titleOnlyMeansNothingToList() {
+        val r = CleanupText.check("Title: Okay, let's see", listOf("Okay, let's see."))
+        assertTrue(r is Result.Rejected && !r.retry)
+    }
+
     @Test fun ignoresCodeFences() =
         assertTrue(CleanupText.check("```\n- Buy milk [1]\n```", 1) is Result.Ok)
 
