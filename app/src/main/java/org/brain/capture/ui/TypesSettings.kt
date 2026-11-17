@@ -54,8 +54,15 @@ import org.brain.capture.types.Profiles
 
 /** Drawable for a type's icon name. */
 fun typeIcon(name: String): Int = when (name) {
-    "idea" -> R.drawable.t_idea; "task" -> R.drawable.t_task; "people" -> R.drawable.t_people; "mic" -> R.drawable.t_mic
-    "lock" -> R.drawable.t_lock; "book" -> R.drawable.t_book; "cart" -> R.drawable.t_cart; else -> R.drawable.t_star
+    "idea" -> R.drawable.t_idea; "task" -> R.drawable.t_task; "bug" -> R.drawable.t_bug; "wrench" -> R.drawable.t_wrench
+    "sparkle" -> R.drawable.t_sparkle; "rocket" -> R.drawable.t_rocket; "code" -> R.drawable.t_code; "flag" -> R.drawable.t_flag
+    "target" -> R.drawable.t_target; "pen" -> R.drawable.t_pen; "chat" -> R.drawable.t_chat; "people" -> R.drawable.t_people
+    "phone" -> R.drawable.t_phone; "mic" -> R.drawable.t_mic; "calendar" -> R.drawable.t_calendar; "clock" -> R.drawable.t_clock
+    "pin" -> R.drawable.t_pin; "book" -> R.drawable.t_book; "cart" -> R.drawable.t_cart; "money" -> R.drawable.t_money
+    "gift" -> R.drawable.t_gift; "home" -> R.drawable.t_home; "car" -> R.drawable.t_car; "plane" -> R.drawable.t_plane
+    "camera" -> R.drawable.t_camera; "music" -> R.drawable.t_music; "heart" -> R.drawable.t_heart; "health" -> R.drawable.t_health
+    "leaf" -> R.drawable.t_leaf; "question" -> R.drawable.t_question; "lock" -> R.drawable.t_lock
+    else -> R.drawable.t_star
 }
 
 /**
@@ -130,7 +137,8 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
                 OutlinedTextField(p.name, { p = p.copy(name = it.take(24)) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(p.subtitle, { p = p.copy(subtitle = it.take(40)) }, label = { Text("Short description") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("Icon", fontSize = 13.sp, color = Ink.TextDim)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Profiles.ICONS.forEach { name ->
                         Box(Modifier.size(36.dp).clip(CircleShape).background(if (p.icon == name) Ink.Amber else Ink.Raised)
                             .clickable { p = p.copy(icon = name) }, contentAlignment = Alignment.Center) {

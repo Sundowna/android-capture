@@ -34,7 +34,12 @@ object Profiles {
     const val MEETING = "meeting"
     const val PRIVATE = "private"
     val BUILT_IN = setOf(IDEA, TASK, MEETING, PRIVATE)
-    val ICONS = listOf("idea", "task", "people", "mic", "lock", "star", "book", "cart")
+    val ICONS = listOf(
+        "idea", "task", "bug", "wrench", "sparkle", "rocket", "code", "flag",
+        "target", "pen", "chat", "people", "phone", "mic", "calendar", "clock",
+        "pin", "book", "cart", "money", "gift", "home", "car", "plane",
+        "camera", "music", "heart", "health", "leaf", "question", "lock", "star",
+    )
 
     /** Most widget buttons there is room for (Open Brain takes one of them when it is shown). */
     const val WIDGET_SLOTS = 4
@@ -55,12 +60,41 @@ Rules: start with who was there if it is said, then what was decided, then open 
 Remove filler words and repeats. Use only what the speaker said. Add no facts, names or conclusions.
 Keep the language of the transcript."""
 
+    const val FIX_FEATURE_INSTRUCTION = """This voice note is about an app or a tool: things to fix and features to add.
+Rewrite it as a checklist. Start each line with "Fix: " for something broken or wrong, or "Feature: " for something new or better.
+Rules: one fix or feature per line; say what to change and where, using the speaker's own names for screens, buttons and apps; keep details such as numbers, names and steps.
+Leave out greetings, thinking aloud and remarks that are not fixes or features.
+Use only what the speaker said. Add no fixes, features or solutions.
+Keep the language of the transcript."""
+
+    const val FIX_INSTRUCTION = """This voice note lists things to fix in an app or a tool.
+Rewrite it as a checklist: one problem per line, saying what goes wrong and where, and what it should do instead if the speaker says so.
+Use the speaker's own names for screens, buttons and apps; keep details such as numbers and steps.
+Leave out greetings, thinking aloud and remarks that are not fixes.
+Use only what the speaker said. Add no causes or solutions.
+Keep the language of the transcript."""
+
+    const val FEATURE_INSTRUCTION = """This voice note lists features to add or change in an app or a tool.
+Rewrite it as a checklist: one feature per line, starting with a verb, and saying where it goes.
+Use the speaker's own names for screens, buttons and apps; keep details such as numbers, examples and order.
+Leave out greetings, thinking aloud and remarks that are not features.
+Use only what the speaker said. Add no features or details.
+Keep the language of the transcript."""
+
+    /** Types added after the first release: put into existing lists once, after that they are ordinary, deletable types. */
+    private val ADDED = listOf(
+        CaptureProfile("c-fixfeature", "Fix / Feature", "sorted into fixes and features", "wrench", FIX_FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
+        CaptureProfile("c-fix", "Fix", "what's broken, where", "bug", FIX_INSTRUCTION, checklist = true, private = false, onWidget = false),
+        CaptureProfile("c-feature", "Feature", "what to add or change", "sparkle", FEATURE_INSTRUCTION, checklist = true, private = false, onWidget = false),
+    )
+    private const val KEY_ADDED = "capture_profiles_added"
+
     private val DEFAULTS = listOf(
         CaptureProfile(IDEA, "Idea", "tidy into bullets", "idea", IDEA_INSTRUCTION, checklist = false, private = false, onWidget = true),
         CaptureProfile(TASK, "Task", "checklist + due date", "task", TASK_INSTRUCTION, checklist = true, private = false, onWidget = true),
         CaptureProfile(MEETING, "Meeting", "who, decisions, to-dos", "people", MEETING_INSTRUCTION, checklist = false, private = false, onWidget = false),
         CaptureProfile(PRIVATE, "Private", "stays on device", "lock", IDEA_INSTRUCTION, checklist = false, private = true, onWidget = true),
-    )
+    ) + ADDED
 
     fun default(id: String): CaptureProfile? = DEFAULTS.firstOrNull { it.id == id }
 
@@ -72,7 +106,14 @@ Keep the language of the transcript."""
     fun all(ctx: Context): List<CaptureProfile> {
         state.value?.let { return it }
         val raw = prefs(ctx).getString(KEY, null)
-        val list = raw?.let { runCatching { parse(it) }.getOrNull() }?.takeIf { it.isNotEmpty() } ?: DEFAULTS
+        var list = raw?.let { runCatching { parse(it) }.getOrNull() }?.takeIf { it.isNotEmpty() } ?: DEFAULTS
+        val seen = prefs(ctx).getStringSet(KEY_ADDED, emptySet())!!
+        val missing = ADDED.filter { it.id !in seen }
+        if (missing.isNotEmpty()) {
+            list = list + missing.filter { m -> list.none { it.id == m.id } }
+            prefs(ctx).edit().putString(KEY, JSONArray(list.map(::toJson)).toString())
+                .putStringSet(KEY_ADDED, seen + missing.map { it.id }).apply()
+        }
         state.value = list
         return list
     }
