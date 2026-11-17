@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import org.brain.capture.R
 import org.brain.capture.data.Capture
 import org.brain.capture.pipeline.Notes
+import org.brain.capture.pipeline.Undo
 import org.brain.capture.share.AppScope
 
 /**
@@ -56,12 +57,14 @@ object SwipeDeletes {
     fun start(ctx: Context, c: Capture) {
         val app = ctx.applicationContext
         _hidden.value = _hidden.value + c.id
+        Undo.record(Undo.Action.PendingDelete(c.id))
         synchronized(jobs) {
             jobs[c.id]?.cancel()
             jobs[c.id] = AppScope.launch {
                 delay(UNDO_MS)
                 synchronized(jobs) { jobs.remove(c.id) }
-                runCatching { Notes.delete(app, c) }.onFailure {
+                // Still the last action: the real delete takes over the home screen's Undo.
+                runCatching { Notes.delete(app, c, undoable = Undo.isPending(c.id)) }.onFailure {
                     withContext(Dispatchers.Main) { Toast.makeText(app, "Could not delete: ${it.message}", Toast.LENGTH_LONG).show() }
                 }
                 _hidden.value = _hidden.value - c.id
@@ -72,6 +75,7 @@ object SwipeDeletes {
     fun undo(id: String) {
         synchronized(jobs) { jobs.remove(id)?.cancel() }
         _hidden.value = _hidden.value - id
+        Undo.forget(id)
     }
 }
 

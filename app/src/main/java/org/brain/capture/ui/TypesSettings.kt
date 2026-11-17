@@ -70,8 +70,11 @@ fun typeIcon(name: String): Int = when (name) {
  * follows; which ones the widget shows; and a one-tap home-screen icon for any of them.
  * [widgetOnly] is the short version the widget's own "Edit widget" opens.
  */
+/** Which part of the type settings to show: Settings has a page for each; the widget's own editor shows both. */
+enum class TypesPart { Types, Widget, Both }
+
 @Composable
-fun CaptureTypesSettings(widgetOnly: Boolean = false) {
+fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widgetOnly) TypesPart.Both else TypesPart.Types) {
     val ctx = LocalContext.current
     val profiles by remember { Profiles.flow(ctx) }.collectAsState()
     val list = profiles ?: return
@@ -79,12 +82,21 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false) {
     var openBrain by remember { mutableStateOf(Profiles.widgetOpenBrain(ctx)) }
     val onWidget = list.count { it.onWidget }
     val room = Profiles.WIDGET_SLOTS - if (openBrain) 1 else 0
+    val switches = part != TypesPart.Types
+    val reorder = part == TypesPart.Types
 
-    Text(if (widgetOnly) "Choose the widget's buttons. Tap a type to edit its name, icon or AI instruction."
-        else "Each type has its own instruction for the AI. Tap one to edit it; the widget shows up to $room of them.",
-        fontSize = 13.sp, color = Ink.TextDim)
+    Text(when (part) {
+        TypesPart.Both -> "Choose the widget's buttons. Tap a type to edit its name, icon or AI instruction."
+        TypesPart.Widget -> "The Brain widget shows up to $room buttons. For a single button, add the 1×1 \"Brain button\" widget instead."
+        TypesPart.Types -> "Each type has its own instruction for the AI. Tap one to edit it; ↑ moves it up (the first is the default)."
+    }, fontSize = 13.sp, color = Ink.TextDim)
     list.forEachIndexed { i, p ->
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { editing = p }.heightIn(min = 60.dp)
+        // On the widget page a tap switches the button; elsewhere it opens the type.
+        val canSwitch = p.onWidget || onWidget < room
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
+            if (part == TypesPart.Widget) { if (canSwitch) { Profiles.put(ctx, p.copy(onWidget = !p.onWidget)); Shortcuts.update(ctx); BrainWidget.refresh(ctx) } }
+            else editing = p
+        }.heightIn(min = 60.dp)
             .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(if (i == 0) Ink.Amber else Ink.Well), contentAlignment = Alignment.Center) {
                 MIcon(painterResource(typeIcon(p.icon)), null, Modifier.size(20.dp), tint = if (i == 0) Ink.OnAmber else Ink.TextStrong)
@@ -94,16 +106,16 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false) {
                 Text(p.subtitle.ifBlank { listOfNotNull(if (p.private) "stays on phone" else null, if (p.checklist) "checklist" else null)
                     .joinToString(" · ") }, fontSize = 12.sp, color = Ink.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (!widgetOnly && i > 0) TextButton(onClick = { Profiles.move(ctx, p.id, -1); Shortcuts.update(ctx); BrainWidget.refresh(ctx) }) { Text("↑") }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Switch(checked = p.onWidget, enabled = p.onWidget || onWidget < room, onCheckedChange = {
+            if (reorder && i > 0) TextButton(onClick = { Profiles.move(ctx, p.id, -1); Shortcuts.update(ctx); BrainWidget.refresh(ctx) }) { Text("↑") }
+            if (switches) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Switch(checked = p.onWidget, enabled = canSwitch, onCheckedChange = {
                     Profiles.put(ctx, p.copy(onWidget = it)); Shortcuts.update(ctx); BrainWidget.refresh(ctx)
                 }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
-                Text("widget", fontSize = 10.sp, color = Ink.TextDim)
+                if (part == TypesPart.Both) Text("widget", fontSize = 10.sp, color = Ink.TextDim)
             }
         }
     }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    if (switches) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Open Brain button", fontSize = 15.sp, color = Ink.Text)
             Text("Opens your notes from the widget", fontSize = 12.sp, color = Ink.TextDim)
@@ -114,7 +126,7 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false) {
             openBrain = it; Profiles.setWidgetOpenBrain(ctx, it); BrainWidget.refresh(ctx)
         }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (part != TypesPart.Widget) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = { editing = Profiles.newProfile(private = false) }) { Text("+ New type") }
         TextButton(onClick = { editing = Profiles.newProfile(private = true) }) { Text("+ New private type") }
     }

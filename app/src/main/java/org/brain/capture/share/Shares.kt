@@ -171,6 +171,7 @@ object Shares {
                         transcript = noteText(c, meta), lastActivityAt = now)
                     dao.upsert(c)
                     dao.touch(target.id, now)
+                    org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Added(c.id))
                     org.brain.capture.pipeline.Notes.forget(target.id)
                     d.deleteRecursively()
                     return@withContext path
@@ -185,6 +186,7 @@ object Shares {
                 c = c.copy(state = CaptureStates.SAVED, notePath = path, error = null, details = details(meta),
                     transcript = noteText(c, meta), lastActivityAt = System.currentTimeMillis())
                 dao.upsert(c)
+                org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Created(c.id))
                 d.deleteRecursively()
                 path
             } catch (t: Throwable) {

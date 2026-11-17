@@ -23,7 +23,7 @@ object TextCapture {
             val now = System.currentTimeMillis()
             return@withContext Capture(id = UUID.randomUUID().toString(), createdAt = now, state = CaptureStates.SAVED,
                 kind = "text", transcript = text, type = type, cleanup = "skipped: typed").also {
-                dao.upsert(it); org.brain.capture.ui.BrainWidget.refresh(ctx)
+                dao.upsert(it); Undo.record(Undo.Action.Created(it.id)); org.brain.capture.ui.BrainWidget.refresh(ctx)
             }
         }
         val staged = Shares.stage(ctx, Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
@@ -55,6 +55,7 @@ object TextCapture {
         dao.upsert(c)
         dao.touch(note.id, now)
         Notes.forget(note.id)
+        Undo.record(Undo.Action.Added(c.id))
         c
     }
 }

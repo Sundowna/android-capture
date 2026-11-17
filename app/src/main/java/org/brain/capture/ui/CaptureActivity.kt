@@ -412,12 +412,16 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                             recleanUndo?.noteId == c.id -> scope.launch { CleanupStep.undoReclean(ctx) }
                             // 2. An addition: that part comes out of the note again.
                             lastAddition != null && lastAddition.id in watched -> scope.launch {
+                                org.brain.capture.pipeline.Undo.forget(lastAddition.id)
                                 runCatching { Notes.deleteAddition(ctx, lastAddition) }.onFailure {
                                     android.widget.Toast.makeText(ctx, it.message ?: "Could not undo", android.widget.Toast.LENGTH_LONG).show()
                                 }
                             }
                             // 3. A new note: it goes to the vault's .trash (private ones are deleted).
-                            c.id in watched -> { undone = true; scope.launch { runCatching { Notes.delete(ctx, c) } } }
+                            c.id in watched -> {
+                                undone = true; org.brain.capture.pipeline.Undo.forget(c.id)
+                                scope.launch { runCatching { Notes.delete(ctx, c, undoable = false) } }
+                            }
                         }
                     },
                 )

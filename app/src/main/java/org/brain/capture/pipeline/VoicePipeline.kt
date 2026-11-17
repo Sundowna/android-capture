@@ -62,6 +62,7 @@ class VoicePipeline(private val context: Context) {
             File(wav.parentFile, wav.nameWithoutExtension + ".append").delete()
 
             val target = c.appendTo?.let { dao.get(it) }
+            Undo.record(if (target != null) Undo.Action.Added(c.id) else Undo.Action.Created(c.id))
             CaptureState.live(null)
             CaptureState.set(Phase.Saved(target?.notePath ?: c.notePath ?: "", c.warning, appended = target != null,
                 captureId = target?.id ?: c.id))
@@ -93,6 +94,7 @@ class VoicePipeline(private val context: Context) {
         c = c.copy(state = CaptureStates.SAVED, error = null, lastActivityAt = System.currentTimeMillis()).also { dao.upsert(it) }
         wav.delete()
         File(wav.path.removeSuffix(".wav") + ".ogg").delete()
+        Undo.record(if (c.appendTo != null) Undo.Action.Added(c.id) else Undo.Action.Created(c.id))
         CaptureState.live(null)
         CaptureState.set(Phase.Saved("", c.warning, captureId = c.id))
     }

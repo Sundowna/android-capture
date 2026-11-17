@@ -487,7 +487,8 @@ private fun TypeDialog(c: Capture, onDone: () -> Unit) {
             TextButton(enabled = text.isNotBlank() && !saving, onClick = {
                 saving = true; error = null
                 scope.launch {
-                    runCatching { Notes.appendTyped(ctx, c, text) }.onSuccess { onDone() }.onFailure { error = it.message }
+                    // Its own row, so the home screen's Undo can take it back out.
+                    runCatching { org.brain.capture.pipeline.TextCapture.append(ctx, c, text.trim()) }.onSuccess { onDone() }.onFailure { error = it.message }
                     saving = false
                 }
             }) { Text("Add") }

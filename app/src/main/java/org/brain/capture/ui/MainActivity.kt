@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.brain.capture.pipeline.Undo
 import androidx.compose.runtime.rememberCoroutineScope
 import org.brain.capture.CaptureState
 import org.brain.capture.Phase
@@ -186,6 +187,10 @@ private fun HomeScreen(
     val cards = allCards.filter { it.id !in swiped }
     val snackbar = remember { SnackbarHostState() }
     val snackScope = rememberCoroutineScope()
+    // The home screen's Undo: the last action of any kind (Undo.kt).
+    val undo by Undo.last.collectAsState()
+    var undoing by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { Undo.cleanupOnStart(ctx) }
     fun swipeDelete(c: org.brain.capture.data.Capture) {
         SwipeDeletes.start(ctx, c)
         snackScope.launch {
@@ -246,6 +251,27 @@ private fun HomeScreen(
             item("top") {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Brain", fontFamily = Grotesk, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    // The last action, ready to take back; says what it will undo, gone when there is nothing.
+                    AnimatedVisibility(undo != null && !undoing, enter = fadeIn() + androidx.compose.animation.expandHorizontally(),
+                        exit = fadeOut() + androidx.compose.animation.shrinkHorizontally()) {
+                        val label = remember(undo) { undo?.label ?: "" }
+                        Surface(onClick = {
+                            undoing = true
+                            snackScope.launch {
+                                val msg = Undo.undo(ctx)
+                                undoing = false
+                                snackbar.currentSnackbarData?.dismiss()
+                                snackbar.showSnackbar(msg, duration = SnackbarDuration.Short)
+                            }
+                        }, shape = RoundedCornerShape(999.dp), color = Ink.Panel,
+                            modifier = Modifier.height(40.dp).semantics { contentDescription = label }) {
+                            Row(Modifier.padding(start = 12.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(painterResource(R.drawable.ic_undo), null, Modifier.size(18.dp), tint = Ink.Amber)
+                                Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextSoft)
+                            }
+                        }
+                    }
                     IconButton(onClick = onSettings) {
                         Icon(painterResource(R.drawable.ic_tune), "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

@@ -51,6 +51,7 @@ object CleanupStep {
     suspend fun undoReclean(ctx: Context) = withContext(Dispatchers.IO) {
         val u = lastReclean.value ?: return@withContext
         lastReclean.value = null
+        org.brain.capture.pipeline.Undo.forget(u.noteId)
         val dao = CaptureDb.get(ctx).dao()
         if (u.path != null && u.before != null) {
             val vault = VaultWriter(ctx, Prefs(ctx).vaultUri ?: return@withContext)
@@ -88,6 +89,7 @@ object CleanupStep {
         }
         dao.touch(noteId, System.currentTimeMillis())
         lastReclean.value = RecleanUndo(noteId, rows, path, before, path?.let { vault.read(it) })
+        org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Recleaned(noteId))
         org.brain.capture.ui.BrainWidget.refresh(ctx)
     }
 

@@ -208,18 +208,31 @@ object Notes {
         Log.i(TAG, "Took back addition ${a.id} from $path")
     }
 
-    suspend fun delete(ctx: Context, c: Capture) = withContext(Dispatchers.IO) {
+    /**
+     * Deletes a note: vault files go to `.trash`, private audio is held back in app storage. The
+     * home screen's Undo can then put everything back ([restore]) until the next action replaces it.
+     * [undoable] = false when this delete is itself an undo (of a new note).
+     */
+    suspend fun delete(ctx: Context, c: Capture, undoable: Boolean = true) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
+        val rows = listOf(c) + dao.additions(c.id)
         if (c.isPrivate) {
-            // Nothing in the vault: delete the app's own audio and forget the capture.
-            (listOf(c) + dao.additions(c.id)).forEach { a -> a.audioVaultName?.let { File(ctx.filesDir, it).delete() } }
+            // Nothing in the vault: the app's own audio is held for Undo, then the capture is forgotten.
+            val held = rows.mapNotNull { a -> a.audioVaultName?.let { name ->
+                val f = File(ctx.filesDir, name)
+                val keep = File(Undo.holdDir(ctx), f.name)
+                if (f.exists() && (f.renameTo(keep) || run { f.copyTo(keep, true); f.delete() })) keep.path to f.path else null
+            } }
             dao.deleteWithAdditions(c.id)
             cache.remove(c.id)
             Log.i(TAG, "Deleted private capture ${c.id}")
+            if (undoable) Undo.record(Undo.Action.Deleted(c.id, rows, emptyList(), held))
+            else held.forEach { File(it.first).delete() }
             return@withContext
         }
         val vault = vault(ctx)
         val path = locate(ctx, vault, c)
+        val moves = ArrayList<Pair<String, String>>() // (where it is in .trash, where it was)
         val own = buildList {
             c.audioVaultName?.let(::add)
             dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add) }
@@ -232,14 +245,35 @@ object Notes {
         val inbox = Prefs(ctx).inboxFolder
         for (name in own) {
             val moved = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name")
-                .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
+                .map { it.trimStart('/') }.distinct().any { p ->
+                    runCatching { vault.trashTo(p) }.getOrNull()?.also { moves += it to p } != null
+                }
             if (!moved) Log.w(TAG, "Attachment not found for delete: $name")
         }
-        if (path != null) vault.trash(path)
+        if (path != null) vault.trashTo(path)?.let { moves += it to path }
         dao.clearEdit(c.id)
         dao.deleteWithAdditions(c.id)
         cache.remove(c.id)
         Log.i(TAG, "Deleted capture ${c.id} (${own.size} file(s)) to .trash")
+        if (undoable) Undo.record(Undo.Action.Deleted(c.id, rows.map { if (it.id == c.id && path != null) it.copy(notePath = path) else it }, moves, emptyList()))
+    }
+
+    /** Undo of [delete]: files back from `.trash` (or app storage), rows back in the database. */
+    suspend fun restore(ctx: Context, d: Undo.Action.Deleted) = withContext(Dispatchers.IO) {
+        val dao = CaptureDb.get(ctx).dao()
+        var rows = d.rows
+        if (d.moves.isNotEmpty()) {
+            val vault = vault(ctx)
+            for ((trashed, original) in d.moves) {
+                val now = vault.restore(trashed, original) ?: throw VaultUnavailableException("Not in the vault's .trash any more: ${original.substringAfterLast('/')}")
+                // Its old name was taken meanwhile: the note row follows the file.
+                if (now != original) rows = rows.map { if (it.notePath == original) it.copy(notePath = now) else it }
+            }
+        }
+        d.held.forEach { (kept, original) -> File(kept).let { f -> if (!f.renameTo(File(original))) { f.copyTo(File(original), true); f.delete() } } }
+        rows.forEach { dao.upsert(it) }
+        rows.forEach { cache.remove(it.id) }
+        Log.i(TAG, "Restored capture ${d.id}")
     }
 
     private fun vault(ctx: Context): VaultWriter =
