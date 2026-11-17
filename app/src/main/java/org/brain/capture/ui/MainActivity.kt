@@ -279,7 +279,7 @@ private fun HomeScreen(
                 Box(Modifier.animateItem()) {
                     NoteCard(c, refresh, justSaved, canRecord,
                         onRecordMore = { onCapture(CaptureRequest(start = true, noteId = it.id)) },
-                        onOpen = { if (it.kind == "voice" || it.kind == "text") onCapture(CaptureRequest(noteId = it.id)) })
+                        onOpen = { onCapture(CaptureRequest(noteId = it.id)) })
                 }
             }
             if (cards.isEmpty() && pending.isEmpty()) item("empty") {

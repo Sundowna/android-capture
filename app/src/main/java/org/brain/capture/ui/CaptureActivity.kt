@@ -304,7 +304,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             val typedNote = note != null && note?.kind != "voice" && additions.none { it.kind == "voice" } && !recordingHere && !undone
             if (mode == CaptureActivity.MODE_VOICE && typedNote) {
                 Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (note?.kind == "link") "Saved link" else "Typed note", fontFamily = Grotesk,
+                    Text(when (note?.kind) { "link" -> "Saved link"; "file" -> "Shared file"; else -> "Typed note" }, fontFamily = Grotesk,
                         fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text)
                 }
             } else if (mode == CaptureActivity.MODE_VOICE) {
@@ -537,6 +537,8 @@ private fun Section(
     when {
         recordingThis -> Hint(if (paused) "Paused" else "Listening…",
             if (view == View.Clean) "Talk freely. The clean version appears when you stop." else "Your exact words appear the moment you stop.")
+        // Shared files: their thumbnails (tap one to open it), then any caption.
+        c.kind == "file" -> SharedFiles(c)
         c.kind != "voice" -> Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
         view == View.Raw -> {
             val words = transcript ?: live
@@ -645,6 +647,8 @@ private fun Footer(c: Capture?, view: View, recording: Boolean) {
     if (c == null || recording || c.state != CaptureStates.SAVED) return
     Spacer(Modifier.height(4.dp))
     Text(when {
+        c.kind == "file" -> "The file is saved in your vault's Attachments."
+        c.kind == "link" -> "The link and its page title are saved in the note."
         c.kind != "voice" -> "Your words, as you typed them."
         view == View.Clean -> "Your words, reordered. Nothing added. Tap a line to see what you said."
         else -> "Raw transcript is always kept with the audio."

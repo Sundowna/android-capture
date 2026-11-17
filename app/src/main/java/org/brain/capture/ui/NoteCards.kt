@@ -10,6 +10,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -126,8 +128,10 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
     val scope = rememberCoroutineScope()
     val border by animateColorAsState(if (justSaved) b.success.copy(alpha = 0.5f) else Color.Transparent, label = "b")
 
-    Surface(shape = CardShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp,
-        border = BorderStroke(1.5.dp, border), modifier = Modifier.fillMaxWidth().animateContentSize()) {
+    // Tapping anywhere on the card opens the note; only its small action buttons do something else.
+    Surface(onClick = { onOpen(c) }, shape = CardShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp,
+        border = BorderStroke(1.5.dp, border), modifier = Modifier.fillMaxWidth().animateContentSize()
+            .semantics { onClick(label = "Open note") { onOpen(c); true } }) {
         Column(Modifier.padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Header: kind + where/when, or the fresh "saved" confirmation.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -152,9 +156,10 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
             when (c.kind) {
                 "link" -> LinkBody(text)
                 "file" -> {
-                    SharedFiles(c)
+                    SharedFiles(c, onTap = { onOpen(c) })
                     val caption = text.lines().drop(1).joinToString("\n").trim() // first line is "Shared from …"
-                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, null)
+                    // Tap opens the note (like every other card); long-press edits the caption.
+                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, { onOpen(c) })
                 }
                 else -> when {
                     text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, { onOpen(c) })
@@ -388,11 +393,11 @@ private fun fileMeta(ctx: android.content.Context, c: Capture, source: String?):
 
 /** Previews of images and PDF first pages; document names below. Tapping opens the note. */
 @Composable
-private fun SharedFiles(c: Capture) {
+internal fun SharedFiles(c: Capture, onTap: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     val list = files(c)
     if (list.isEmpty()) return
-    val open = { c.notePath?.let { openInObsidian(ctx, it) }; Unit }
+    val open = onTap ?: { c.notePath?.let { openInObsidian(ctx, it) }; Unit }
     val withThumb = list.filter { it.thumb.isNotEmpty() && File(it.thumb).exists() }
     if (withThumb.isNotEmpty()) Row(Modifier.padding(end = 8.dp).horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) { withThumb.forEach { Thumb(it, open) } }
