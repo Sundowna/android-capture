@@ -99,7 +99,7 @@ private fun Menu(open: (Page) -> Unit) {
     val types = profiles.orEmpty()
     val language = when (prefs.language) { "de" -> "Deutsch"; "en" -> "English"; else -> "Auto language" }
     val summary = mapOf(
-        Page.Types to "${types.size} types · ${types.firstOrNull()?.name ?: ""} first",
+        Page.Types to "${types.size} types · default ${org.brain.capture.types.Profiles.primary(ctx).name}",
         Page.Widget to types.filter { it.onWidget }.joinToString(", ") { it.name }.ifEmpty { "No buttons" },
         Page.Vault to listOfNotNull(prefs.vaultUri?.lastPathSegment?.substringAfter(':')?.substringAfterLast('/') ?: "Not selected", prefs.inboxFolder).joinToString(" · "),
         Page.Transcription to (if (ModelStore(ctx).isInstalled()) "Whisper small" else "Model not installed") + " · " + language,

@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,8 +28,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon as MIcon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -44,7 +50,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -84,12 +93,14 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
     val room = Profiles.WIDGET_SLOTS - if (openBrain) 1 else 0
     val switches = part != TypesPart.Types
     val reorder = part == TypesPart.Types
+    var primaryId by remember { mutableStateOf(Profiles.primary(ctx).id) }
 
     Text(when (part) {
         TypesPart.Both -> "Choose the widget's buttons. Tap a type to edit its name, icon or AI instruction."
         TypesPart.Widget -> "The Brain widget shows up to $room buttons. For a single button, add the 1×1 \"Brain button\" widget instead."
-        TypesPart.Types -> "Each type has its own instruction for the AI. Tap one to edit it; ↑ moves it up (the first is the default)."
+        TypesPart.Types -> "Each type has its own instruction for the AI. Tap one to edit it; ↑ moves it up."
     }, fontSize = 13.sp, color = Ink.TextDim)
+    if (part == TypesPart.Types) DefaultTypePicker(list, primaryId) { Profiles.setPrimary(ctx, it); primaryId = it; Shortcuts.update(ctx) }
     list.forEachIndexed { i, p ->
         // On the widget page a tap switches the button; elsewhere it opens the type.
         val canSwitch = p.onWidget || onWidget < room
@@ -98,8 +109,8 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
             else editing = p
         }.heightIn(min = 60.dp)
             .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(if (i == 0) Ink.Amber else Ink.Well), contentAlignment = Alignment.Center) {
-                MIcon(painterResource(typeIcon(p.icon)), null, Modifier.size(20.dp), tint = if (i == 0) Ink.OnAmber else Ink.TextStrong)
+            Box(Modifier.size(40.dp).clip(CircleShape).background(if (p.id == primaryId) Ink.Amber else Ink.Well), contentAlignment = Alignment.Center) {
+                MIcon(painterResource(typeIcon(p.icon)), null, Modifier.size(20.dp), tint = if (p.id == primaryId) Ink.OnAmber else Ink.TextStrong)
             }
             Column(Modifier.weight(1f)) {
                 Text(p.name.ifBlank { "Unnamed" }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.Text)
@@ -135,17 +146,67 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
     }) }
 }
 
+/** Settings → Capture types: which type the big mic button (and Type, Paste, the tile) uses. */
+@Composable
+private fun DefaultTypePicker(list: List<CaptureProfile>, current: String, pick: (String) -> Unit) {
+    val choices = list.filter { !it.private && it.name.isNotBlank() }
+    val sel = choices.firstOrNull { it.id == current } ?: choices.firstOrNull() ?: return
+    var open by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Ink.Raised).padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Default type", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.Text)
+            Text("Big mic button, Type and Paste", fontSize = 12.sp, color = Ink.TextDim)
+        }
+        Box {
+            Row(Modifier.clip(RoundedCornerShape(10.dp)).background(Ink.Amber).clickable { open = true }
+                .heightIn(min = 40.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MIcon(painterResource(typeIcon(sel.icon)), null, Modifier.size(16.dp), tint = Ink.OnAmber)
+                Text(sel.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink.OnAmber)
+                Text("▾", fontSize = 13.sp, color = Ink.OnAmber)
+            }
+            DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Ink.Panel) {
+                choices.forEach { p ->
+                    DropdownMenuItem(
+                        text = { Text(p.name, fontWeight = if (p.id == sel.id) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (p.id == sel.id) Ink.Amber else Ink.Text) },
+                        leadingIcon = { MIcon(painterResource(typeIcon(p.icon)), null, Modifier.size(18.dp),
+                            tint = if (p.id == sel.id) Ink.Amber else Ink.TextStrong) },
+                        onClick = { open = false; pick(p.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () -> Unit) {
     val ctx = LocalContext.current
     var p by remember { mutableStateOf(start) }
     var confirmDelete by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDone,
-        containerColor = Ink.Panel,
-        title = { Text(if (start.name.isBlank()) "New ${if (start.private) "private " else ""}type" else "Edit ${start.name}") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    var confirmDiscard by remember { mutableStateOf(false) }
+    // Back or Cancel with unsaved changes asks first; a tap outside can't close it (there is no outside).
+    val leave = { if (p != start) confirmDiscard = true else onDone() }
+    val save = {
+        Profiles.put(ctx, p.copy(name = p.name.trim(), subtitle = p.subtitle.trim(),
+            instruction = p.instruction.ifBlank { Profiles.IDEA_INSTRUCTION }))
+        onDone()
+    }
+    Dialog(onDismissRequest = leave, properties = DialogProperties(usePlatformDefaultWidth = false,
+        dismissOnClickOutside = false, decorFitsSystemWindows = false)) {
+      Surface(Modifier.fillMaxSize(), color = Ink.Panel) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = leave) { Text("Cancel") }
+                Text(if (start.name.isBlank()) "New ${if (start.private) "private " else ""}type" else "Edit ${start.name}",
+                    Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink.Text,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                TextButton(enabled = p.name.isNotBlank(), onClick = save) { Text("Save") }
+            }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(p.name, { p = p.copy(name = it.take(24)) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(p.subtitle, { p = p.copy(subtitle = it.take(40)) }, label = { Text("Short description") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("Icon", fontSize = 13.sp, color = Ink.TextDim)
@@ -185,13 +246,15 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
                 if (p.name.isNotBlank()) TextButton(onClick = { Shortcuts.pin(ctx, p) }) { Text("Add a one-tap icon to the home screen") }
                 if (canDelete) TextButton(onClick = { confirmDelete = true }) { Text("Delete this type", color = Ink.Error) }
             }
-        },
-        confirmButton = { TextButton(enabled = p.name.isNotBlank(), onClick = {
-            Profiles.put(ctx, p.copy(name = p.name.trim(), subtitle = p.subtitle.trim(),
-                instruction = p.instruction.ifBlank { Profiles.IDEA_INSTRUCTION }))
-            onDone()
-        }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } },
+        }
+      }
+    }
+    if (confirmDiscard) AlertDialog(
+        onDismissRequest = { confirmDiscard = false }, containerColor = Ink.Panel,
+        title = { Text("Discard your changes?") },
+        text = { Text("What you changed in this type is not saved yet.") },
+        confirmButton = { TextButton(onClick = { confirmDiscard = false; onDone() }) { Text("Discard", color = Ink.Error) } },
+        dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") } },
     )
     if (confirmDelete) AlertDialog(
         onDismissRequest = { confirmDelete = false }, containerColor = Ink.Panel,

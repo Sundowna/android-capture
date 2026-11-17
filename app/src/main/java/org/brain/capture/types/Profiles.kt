@@ -260,12 +260,23 @@ $FEEDBACK_RULES"""
         return types + if (open) listOf(null) else emptyList()
     }
 
-    /** The type a plain one-tap icon or the quick settings tile uses: the first one on the widget. */
-    fun primary(ctx: Context): CaptureProfile = all(ctx).firstOrNull { it.onWidget && !it.private } ?: get(ctx, IDEA)
+    /**
+     * The default type: what the home screen's big mic button, Type and Paste, the plain one-tap
+     * icon and the quick settings tile use. Chosen in Settings → Capture types; until then (or if
+     * that type was deleted) Idea, which the big mic button always used.
+     */
+    fun primary(ctx: Context): CaptureProfile {
+        val list = all(ctx)
+        return prefs(ctx).getString(KEY_DEFAULT, null)?.let { id -> list.firstOrNull { it.id == id && !it.private } }
+            ?: list.firstOrNull { it.id == IDEA } ?: list.firstOrNull { !it.private } ?: get(ctx, IDEA)
+    }
+
+    fun setPrimary(ctx: Context, id: String) { prefs(ctx).edit().putString(KEY_DEFAULT, id).apply(); state.value = all(ctx).toList() }
 
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private const val KEY = "capture_profiles"
     private const val KEY_OPEN = "widget_open_brain"
+    private const val KEY_DEFAULT = "default_type"
 
     private fun toJson(p: CaptureProfile) = JSONObject().put("id", p.id).put("name", p.name).put("subtitle", p.subtitle)
         .put("icon", p.icon).put("instruction", p.instruction).put("checklist", p.checklist)

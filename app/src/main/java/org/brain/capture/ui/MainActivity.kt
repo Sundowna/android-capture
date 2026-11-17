@@ -96,6 +96,7 @@ import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.pipeline.Notes
 import org.brain.capture.transcribe.ModelStore
+import org.brain.capture.types.Profiles
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -285,7 +286,7 @@ private fun HomeScreen(
                 }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     BigButton(recording != null, recording?.paused == true, level, 120.dp, buttonModifier) {
                         val r = recording
-                        if (r == null) onCapture(CaptureRequest(start = true))
+                        if (r == null) onCapture(CaptureRequest(start = true, type = Profiles.primary(ctx).id))
                         else stopAndShow(ctx, r, onCapture)
                     }
                     if (recording != null) {
@@ -299,7 +300,7 @@ private fun HomeScreen(
             item("modes") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Type" to CaptureActivity.MODE_TYPE, "Paste" to CaptureActivity.MODE_PASTE).forEach { (label, m) ->
-                        Surface(onClick = { if (canRecord) onCapture(CaptureRequest(mode = m)) },
+                        Surface(onClick = { if (canRecord) onCapture(CaptureRequest(mode = m, type = Profiles.primary(ctx).id)) },
                             shape = RoundedCornerShape(12.dp), color = Ink.Panel,
                             modifier = Modifier.weight(1f).height(48.dp)) {
                             Box(contentAlignment = Alignment.Center) {
