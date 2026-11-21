@@ -13,7 +13,6 @@ sys.dont_write_bytecode = True  # no tools/__pycache__ in the repo
 import re
 import shutil
 import subprocess
-import sys
 
 VAULT_DIR = r"D:\BrainTest\SecondBrain\Open\Brain\10 Projects\2nd Brain\Android Voice App\Documentation"
 CANVAS_URL = "https://claude.ai/code/artifact/e79ec427-0cc3-4021-a7e0-8f26ad13846b"
@@ -141,6 +140,44 @@ def build_canvas(lines, by_id, note):
     return json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False, indent="\t")
 
 
+FIGCRAFT_NAME = "Brain Capture.figcraft"
+FIGCRAFT_CLIS = [r"C:\Program Files\ArtCraft\FigCraft\figcraft-cli.exe",  # installed by the ArtCraft Launcher
+                 r"D:\dev\figcraft\*\figcraft-cli.exe"]                  # a portable copy
+
+
+def build_figcraft(repo):
+    import glob
+    import hashlib
+    clis = [c for pattern in FIGCRAFT_CLIS for c in sorted(glob.glob(pattern))]
+    if not clis:
+        return []
+    clis = [clis[0]]
+    inputs = [os.path.join(repo, "tools", f) for f in ("wireframes.py", "figcraft_build.py")]
+    shots = os.path.join(repo, "docs", "screens")
+    inputs += sorted(os.path.join(shots, f) for f in os.listdir(shots) if SCREEN_RE.match(f))
+    h = hashlib.sha256(clis[-1].encode())
+    for p in inputs:
+        with open(p, "rb") as f:
+            h.update(f.read())
+    digest = h.hexdigest()
+    stamp = os.path.join(git("rev-parse", "--git-common-dir"), "figcraft-inputs.sha")
+    out = os.path.join(VAULT_DIR, FIGCRAFT_NAME)
+    try:
+        with open(stamp) as f:
+            if f.read().strip() == digest and os.path.exists(out):
+                return []
+    except OSError:
+        pass
+    r = subprocess.run([sys.executable, "-I", os.path.join(repo, "tools", "figcraft_build.py"), clis[-1], out],
+                       capture_output=True, text=True)
+    print((r.stdout + r.stderr).strip())
+    if r.returncode != 0:
+        return []
+    with open(stamp, "w") as f:
+        f.write(digest)
+    return [FIGCRAFT_NAME]
+
+
 def main():
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if not os.path.isdir(os.path.dirname(VAULT_DIR)):
@@ -213,6 +250,9 @@ def main():
     spec.loader.exec_module(wireframes)
     if write_if_changed(os.path.join(VAULT_DIR, WIREFRAME_NAME), wireframes.build(note, os.path.relpath(VAULT_DIR, VAULT_ROOT).replace(os.sep, "/")).encode("utf-8")):
         changed.append(WIREFRAME_NAME)
+
+    # FigCraft file: rebuilt only when its inputs changed and FigCraft is installed on this computer.
+    changed += build_figcraft(repo)
 
     print("sync-vault-docs: " + (", ".join(changed) if changed else "vault copy already up to date"))
     return 0
