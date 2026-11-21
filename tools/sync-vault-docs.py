@@ -8,6 +8,8 @@ it is overwritten on every sync. FLOWS.md gets each flow's screen picture
 embedded under its heading. Files are only written when they changed.
 """
 import os
+import sys
+sys.dont_write_bytecode = True  # no tools/__pycache__ in the repo
 import re
 import shutil
 import subprocess
