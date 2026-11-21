@@ -25,3 +25,7 @@ vault-test/
 
 # Release signing (local only)
 keystore.properties
+
+# Python cache from tools/
+__pycache__/
+*.pyc

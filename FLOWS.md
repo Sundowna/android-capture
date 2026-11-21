@@ -2,13 +2,13 @@
 
 For any session or coding agent. Every user path through the app, step by step: where it starts, what each step shows, and where it ends. Read it with [FEATURES.md](FEATURES.md), which lists every single feature; this file shows how they connect.
 
-The same flows are drawn as screens on the design canvas "Brain Camera button" (claude.ai design artifact): the artboard named in each heading, for example `F03`. Rows on the canvas: in-app capture (F01–F07), photo and outside the app (F08–F11), other in-app flows (F12–F18), settings (F19–F26), share and background (F27–F28).
+The same flows are drawn as screens on the design canvas "Brain Camera button" (claude.ai design artifact): the artboard named in each heading, for example `F03`. Rows on the canvas: in-app capture (F01–F07), photo and outside the app (F08–F11), other in-app flows (F12–F18), settings (F19–F26), share and background (F27–F28). F29–F34 (phone home screen, tile, icon menu, widget setup, pinning) are drawn only on the Obsidian wireframe canvas.
 
 Each screen is also saved as a picture in `docs/screens/` (`F03-Recording.png` …). End-to-end tests for every flow: [E2E-TESTS.md](E2E-TESTS.md).
 
 Rule: a change that adds, removes or reorders a step updates, in the same change, this file, the matching artboard, its picture in `docs/screens/` (render the artboard at 390×844) and its tests in E2E-TESTS.md.
 
-Vault copy: after every commit a Git hook copies FEATURES.md, FLOWS.md, E2E-TESTS.md and the screens into the owner's Obsidian vault (Android Voice App → Documentation) and rebuilds two Obsidian canvases: "Brain Capture Flows" (pictures + steps, from this file) and "Brain Capture Wireframes" (every screen drawn with coloured canvas cards, arrows from the tapped control to the screen it opens, from `tools/wireframes.py`). A changed screen or flow also updates its wireframe in `tools/wireframes.py`. Never edit the vault copy; edit here. New computer: `sh tools/install-git-hooks.sh` once; by hand: `python tools/sync-vault-docs.py`.
+Vault copy: after every commit a Git hook copies FEATURES.md, FLOWS.md, SPEC.md, E2E-TESTS.md and the screens into the owner's Obsidian vault (Android Voice App → Documentation) and rebuilds two Obsidian canvases: "Brain Capture Flows" (pictures + steps, from this file) and "Brain Capture Wireframes" (every screen drawn with coloured canvas cards, arrows from the tapped control to the screen it opens, from `tools/wireframes.py`). A changed screen or flow also updates its wireframe in `tools/wireframes.py`. Never edit the vault copy; edit here. New computer: `sh tools/install-git-hooks.sh` once; by hand: `python tools/sync-vault-docs.py`.
 
 Words used: **Home** = the app's main screen. **Note screen** = the screen that shows one note (also used for recording, typing, pasting, editing). **Vault** = the Obsidian folder chosen in setup; new notes go to its inbox folder (`<inbox>/Voice`, `/Text`, `/Links`, `/Documents`, files in `/Attachments`).
 
@@ -29,7 +29,13 @@ Note screen ── tap any text ──────► Edit (F05)
             ── type chip ▾ ───────► Clean again as… (F14)
             ── Open / Private ────► Private note (F18)
             ── Discard (recording)► Discard confirm (F13)
-Outside the app:
+Outside the app (start: phone home screen, F29):
+Phone home screen (F29) ── app icon ──────► Home (F01)
+                        ── long-press icon ► App-icon menu (F31) ─► Recording (F03) / Phone camera (F08)
+                        ── swipe down ─────► Quick settings tile (F30) ─► Recording (F03) ─ tap again ─► Note (F02)
+                        ── add Brain widget ► Widget setup (F32) ─► Brain widget (F11)
+                        ── add 1×1 button ─► One-tap button (F33) ─► 1×1 on the home screen
+Capture types / type editor ── pin icon ──► Pin dialog (F34) ─► icon on the home screen (F29)
 Widget / Talk icon / tile / app-icon menu (F11) ─► Recording (F03)
 Widget Photo / Photo icon (F11) ─► Phone camera (F08) ─► Save to (F09) ─► Saved + voice comment (F10)
 Share from any app ─► Save to (F09) or Already saved (F27) ─► Saved (F10)
@@ -99,6 +105,41 @@ While recording or transcribing ─► Notification (F28)
 - Talk icon: tap starts recording with the default type; tap again stops it and opens the note.
 - Quick settings tile "Brain": tap starts talking (unlocks first on the lock screen); tap again stops and saves.
 - Pinned one-tap icons for a type (from the type editor) or Photo (from Capture types).
+- Each entry point has its own flow below (F29–F34); the 4×3 widget itself is this flow.
+
+## Outside the app: home screen, tile, icons, widget setup
+
+### F29 · Phone home screen (start)
+- Entry: the phone's launcher. Everything Brain puts there: the app icon "Brain Capture" (main build) / "Brain Play" (playground), the "Talk" launcher icon, the Brain widget (4×3), 1×1 "Brain button" widgets, pinned one-tap icons (a type, or Photo).
+- App icon tap → Home (F01) (first run F12 until set up). Long-press → F31.
+- Talk icon, 1×1 type button, pinned type icon → note screen recording at once (F03) with that type (Talk: the default type). Talk tapped again while recording → stops and opens that note.
+- 1×1 Photo button, pinned Photo icon → phone camera (F08) → Save to (F09).
+- Widget buttons → F11. Swipe down → Quick settings (F30). Share from any app → F09.
+- Adding widgets: long-press empty space → Widgets → "Brain" (F32) or "Brain button" (F33).
+
+### F30 · Quick settings tile
+- Entry: Quick settings panel, after adding the tile "Brain" once (edit tiles).
+- Tap → starts talking with the default type (F03); on the lock screen Android asks to unlock first.
+- While recording the tile is active with "Recording · tap to save" ("Paused · tap to save"); tap → stops and saves (note F02). Otherwise it shows the last capture or "Tap to talk".
+
+### F31 · App-icon long-press menu
+- Entry: long-press the app icon.
+- Shows the first types (up to 3) and Photo last. A type → recording with that type (F03); Photo → camera (F08) → F09. An entry can be dragged out to pin it (F29).
+
+### F32 · Widget setup (placing the Brain widget, or Edit widget)
+- Entry: placing the Brain widget (Android offers this screen; optional) or long-press the widget → Edit widget.
+- Shows "Widget" with every type (tap to edit it, switch on/off the widget; switches disabled when full), "Open Brain button" and "Photo button" switches, "+ New type", "+ New private type", "Done".
+- Done or Back → the widget is on the home screen with these buttons (F11).
+
+### F33 · One-tap button (placing a 1×1 widget)
+- Entry: placing a "Brain button" widget.
+- Shows "One-tap button", "Which type should this button start? One tap on it starts talking; Photo opens the camera." and every type plus Photo.
+- Picking one → the 1×1 button is placed (F29): amber for open types, grey for private, camera icon for Photo. It follows renames; removing the widget forgets the choice.
+
+### F34 · Pin a one-tap icon
+- Entry: "Add a one-tap icon to the home screen" (type editor F21) or "Add a one-tap Photo icon to the home screen" (Capture types F20).
+- Android's own dialog asks to add it; Add → icon on the home screen (F29). A launcher that can't pin → a short message.
+- The icon follows renames; when the type is deleted it is disabled with "This capture type was deleted".
 
 ## Other in-app flows
 
