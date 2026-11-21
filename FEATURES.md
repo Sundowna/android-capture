@@ -2,7 +2,7 @@
 
 For coding agents. Read this before rebuilding, redesigning or replacing any screen or module of the Brain app (playground build: Brain Play).
 
-How these features connect, step by step: [FLOWS.md](FLOWS.md).
+How these features connect, step by step: [FLOWS.md](FLOWS.md). How to test all of it end to end on the phone: [E2E-TESTS.md](E2E-TESTS.md).
 
 ## Rule
 
@@ -12,7 +12,7 @@ How these features connect, step by step: [FLOWS.md](FLOWS.md).
 4. Never drop a listed feature silently. If an item cannot or should not be kept, report one line each:
    `Dropped/changed: <what> | why: <reason> | impact: <what the user loses>`
    Ask before dropping anything the user interacts with directly.
-5. New or changed feature: update this file in the same change.
+5. New or changed feature: update this file and its test in E2E-TESTS.md in the same change.
 
 Source: read from `app/src/main` (branch `playground`, 2026-11-21; main has the same features, see section 17), README.md and docs/*.md. File names are under `app/src/main/java/org/brain/capture/` unless stated.
 
