@@ -47,11 +47,54 @@ object GemmaHolder {
 
     /**
      * The model file, in app-private storage: files/gemma/ (any .litertlm file, E2B before E4B by
-     * name). For now it is copied in by hand with adb (run-as); an import screen comes later.
+     * name). Settings → Transcription imports it ([import]).
      */
     fun modelFile(ctx: Context): File? =
         File(ctx.filesDir, "gemma").listFiles { f -> f.name.endsWith(".litertlm") && f.length() > 0 }
             ?.sortedBy { it.name }?.firstOrNull()
+
+    /**
+     * Copies a .litertlm model the user picked into files/gemma/, replacing the one there. The
+     * engine is closed first; the old file goes only once the new one is complete.
+     */
+    suspend fun import(ctx: Context, uri: android.net.Uri, progress: (Float) -> Unit) = kotlinx.coroutines.withContext(Dispatchers.IO) { lock.withLock {
+        val cr = ctx.contentResolver
+        var name: String? = null; var size = -1L
+        cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)?.use {
+            if (it.moveToFirst()) { name = it.getString(0); size = if (it.isNull(1)) -1L else it.getLong(1) }
+        }
+        val file = name?.substringAfterLast('/')?.takeIf { it.endsWith(".litertlm", ignoreCase = true) }
+            ?: error("That is not a model file. Pick the .litertlm file (for example gemma-4-E2B-it.litertlm).")
+        idleJob?.cancel()
+        engine?.close(); engine = null
+        val dir = File(ctx.filesDir, "gemma").apply { mkdirs() }
+        val part = File(dir, "$file.part")
+        try {
+            background {
+                (cr.openInputStream(uri) ?: error("Could not open the file.")).use { input ->
+                    part.outputStream().use { out ->
+                        val buf = ByteArray(1 shl 20); var done = 0L; var n: Int
+                        while (input.read(buf).also { n = it } >= 0) {
+                            out.write(buf, 0, n); done += n
+                            if (size > 0) progress((done.toFloat() / size).coerceAtMost(1f))
+                        }
+                    }
+                }
+            }
+            if (part.length() == 0L || (size > 0 && part.length() != size)) error("The copy is incomplete. Try again.")
+            dir.listFiles { f -> f.name.endsWith(".litertlm") }?.forEach { it.delete() }
+            if (!part.renameTo(File(dir, file))) error("Could not save the model.")
+            File(ctx.cacheDir, "gemma").deleteRecursively() // compiled for the old model
+        } finally { part.delete() }
+    } }
+
+    /** Removes the model: the app keeps your exact words until a new one is imported. */
+    suspend fun remove(ctx: Context) = kotlinx.coroutines.withContext(Dispatchers.IO) { lock.withLock {
+        idleJob?.cancel()
+        engine?.close(); engine = null
+        File(ctx.filesDir, "gemma").listFiles()?.forEach { it.delete() }
+        File(ctx.cacheDir, "gemma").deleteRecursively()
+    } }
 
     fun modelName(ctx: Context): String = modelFile(ctx)?.name?.removeSuffix(".litertlm") ?: "gemma"
 

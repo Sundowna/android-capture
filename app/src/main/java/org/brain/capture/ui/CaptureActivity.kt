@@ -182,6 +182,7 @@ private enum class View { Clean, Raw }
  * The big button starts a new note, or adds to the note on screen ("New note" starts fresh).
  * [buttonModifier] lets the main screen slide its big button down into this one.
  */
+@android.annotation.SuppressLint("ModifierParameter") // two named modifiers: the shared big button and the card
 @Composable
 fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier: Modifier = Modifier, cardModifier: Modifier = Modifier) {
     val ctx = LocalContext.current
@@ -264,7 +265,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     fun talk(appendTo: Capture?) {
         mode = CaptureActivity.MODE_VOICE
         if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoice(appendTo)
-        else { pendingAppend = appendTo; permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
+        else { pendingAppend = appendTo; permission.launch(if (android.os.Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+            else arrayOf(Manifest.permission.RECORD_AUDIO)) }
     }
     fun newNote() { noteId = null; undone = false; userPickedView = false; view = View.Raw }
     LaunchedEffect(recording?.captureId) { if (recording != null) leftNote = null }
@@ -836,6 +838,7 @@ private fun Waveform(level: () -> Float, active: Boolean) {
     }
 }
 
+@android.annotation.SuppressLint("ModifierParameter") // the shared big button's modifier, not the row's
 @Composable
 private fun Controls(
     recordingHere: Boolean, paused: Boolean, elapsedMs: () -> Long, canUndo: Boolean, level: () -> Float, buttonModifier: Modifier,
@@ -846,13 +849,23 @@ private fun Controls(
     @Suppress("UNUSED_EXPRESSION") tick
     val ms = elapsedMs()
     val s = ms / 1000
+    // Discard: short recordings go at once; from 20 s on it asks first, so a mis-tap can't wipe a long thought.
+    var askDiscard by remember { mutableStateOf(false) }
+    if (!recordingHere) askDiscard = false
+    if (askDiscard) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { askDiscard = false }, containerColor = Ink.Panel,
+        title = { Text("Discard this recording?") },
+        text = { Text("It will not be transcribed or saved, and can't be recovered.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { askDiscard = false; onDiscard() }) { Text("Discard", color = Ink.Error) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { askDiscard = false }) { Text("Keep recording") } },
+    )
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Column(Modifier.width(76.dp)) {
             // Only a time that means something: the running recording, or the length of the last one.
             if (recordingHere || ms > 0) Text("%d:%02d".format(s / 60, s % 60), fontFamily = Mono, fontSize = 14.sp, color = Ink.TextSoft,
                 modifier = Modifier.semantics { contentDescription = "${s / 60} minutes ${s % 60} seconds" })
             if (recordingHere) Text("Discard", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Error,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onDiscard).padding(vertical = 10.dp))
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { if (elapsedMs() < 20_000) onDiscard() else askDiscard = true }.padding(vertical = 10.dp))
         }
         BigButton(recordingHere, paused, level, 84.dp, buttonModifier, onRecord)
         Box(Modifier.width(76.dp), contentAlignment = Alignment.CenterEnd) {
@@ -927,8 +940,8 @@ fun BigButton(recording: Boolean, paused: Boolean, level: () -> Float, size: Dp,
  * [selected] (the screen you are on, e.g. Paste) is lighter; disabled ones are greyed out.
  */
 @Composable
-internal fun BarButton(label: String, icon: Int, selected: Boolean = false, enabled: Boolean = true,
-                       modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun BarButton(label: String, icon: Int, modifier: Modifier = Modifier, selected: Boolean = false, enabled: Boolean = true,
+                       onClick: () -> Unit) {
     val tint = when { !enabled -> Ink.Bar; selected -> Ink.TextStrong; else -> Ink.TextSoft }
     Surface(onClick = { if (enabled) onClick() }, shape = RoundedCornerShape(12.dp), color = if (selected) Ink.Raised else Ink.Panel,
         modifier = modifier.height(52.dp).semantics { this.selected = selected; role = Role.Button }) {

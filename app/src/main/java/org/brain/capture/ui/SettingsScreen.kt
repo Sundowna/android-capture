@@ -145,7 +145,7 @@ private fun PageContent(p: Page) {
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
         }
-        Page.Transcription -> { ModelSetup(); LanguageSetup() }
+        Page.Transcription -> { ModelSetup(); LanguageSetup(); GemmaSetup() }
         Page.Display -> {
             Text("Audio in the vault", style = MaterialTheme.typography.titleSmall)
             Choice(listOf("opus" to "Opus (small)", "wav" to "WAV (lossless)"), prefs.audioFormat) { prefs.audioFormat = it }
@@ -265,6 +265,60 @@ fun ModelSetup(onChanged: () -> Unit = {}) {
         else -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+}
+
+/** The AI cleanup model (Gemma): import, replace or remove the .litertlm file. */
+@Composable
+fun GemmaSetup() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var file by remember { mutableStateOf(org.brain.capture.cleanup.GemmaHolder.modelFile(ctx)) }
+    var progress by remember { mutableStateOf<Float?>(-1f) } // -1 = not importing
+    var error by remember { mutableStateOf<String?>(null) }
+    var done by remember { mutableStateOf<String?>(null) }
+    var askRemove by remember { mutableStateOf(false) }
+    val pick = rememberLauncherForActivityResult(OpenInDownloads()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            error = null; done = null; progress = 0f
+            runCatching { org.brain.capture.cleanup.GemmaHolder.import(ctx, uri) { p -> scope.launch { progress = p } } }
+                .onSuccess { done = "Installed ✓ New notes are cleaned with it." }
+                .onFailure { error = it.message ?: "The import failed." }
+            progress = -1f
+            file = org.brain.capture.cleanup.GemmaHolder.modelFile(ctx)
+        }
+    }
+    val f = file
+    SetupLine("AI cleanup model", if (f != null) "${f.name.removeSuffix(".litertlm")} · ${android.text.format.Formatter.formatShortFileSize(ctx, f.length())}"
+        else "Not installed: notes keep your exact words") {
+        if (f != null) OutlinedButton(enabled = progress == -1f, onClick = { pick.launch(arrayOf("*/*")) }) { Text("Replace") }
+    }
+    if (f == null) {
+        Text("Copy the Gemma model file (.litertlm, for example gemma-4-E2B-it) to this phone, then import it. It runs on the phone; nothing goes online.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Button(enabled = progress == -1f, onClick = { pick.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) { Text("Import model file") }
+    } else if (progress == -1f) {
+        androidx.compose.material3.TextButton(onClick = { askRemove = true }) { Text("Remove model", color = MaterialTheme.colorScheme.error) }
+    }
+    when (val p = progress) {
+        -1f -> {}
+        null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+        else -> {
+            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+            Text("Copying… ${(p * 100).toInt()} %", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    done?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    if (askRemove) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { askRemove = false },
+        title = { Text("Remove the AI model?") },
+        text = { Text("New notes keep your exact words until you import a model again. The file you imported from stays where it is.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = {
+            askRemove = false
+            scope.launch { org.brain.capture.cleanup.GemmaHolder.remove(ctx); file = null; done = null }
+        }) { Text("Remove model", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { askRemove = false }) { Text("Keep model") } },
+    )
 }
 
 @Composable

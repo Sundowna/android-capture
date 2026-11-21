@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Checks switched off on purpose, each with its reason. Everything else stays on. -->
+<lint>
+    <!-- Every stream and cursor flagged is closed with Kotlin's use { }; lint does not follow ?.use / ?: error(...).use. -->
+    <issue id="Recycle" severity="ignore" />
+    <!-- Library versions are pinned on purpose (tested on the Pixel); updates are done deliberately. -->
+    <issue id="GradleDependency" severity="ignore" />
+    <!-- Phone app; the Whisper and Gemma libraries are arm64 builds. -->
+    <issue id="ChromeOsAbiSupport" severity="ignore" />
+    <!-- minSdk 31: the platform ExifInterface has everything used here; no extra library needed. -->
+    <issue id="ExifInterface" severity="ignore" />
+    <!-- Free-space checks before recording: a rough guard is enough; cache is not ours to clear. -->
+    <issue id="UsableSpace" severity="ignore" />
+</lint>

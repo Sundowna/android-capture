@@ -8,5 +8,5 @@
         android:src="@drawable/t_idea" android:importantForAccessibility="no" />
     <TextView android:id="@+id/wb_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_marginTop="4dp" android:textColor="#FF2A2118" android:textSize="12sp" android:textStyle="bold"
-        android:fontFamily="sans-serif-medium" android:maxLines="1" android:ellipsize="end" android:text="Idea" />
+        android:fontFamily="sans-serif-medium" android:maxLines="1" android:ellipsize="end" android:text="@string/widget_button_default" />
 </LinearLayout>

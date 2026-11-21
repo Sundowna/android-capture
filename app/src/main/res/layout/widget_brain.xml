@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Screen 8 of the UX concepts: up to four buttons, chosen in Settings → Capture types
      (or long-press the widget → Edit widget). Tap = start talking at once. -->
+<!-- RemoteViews: the empty FrameLayouts are spacers and gaps the code shows or hides; nested weights split the two rows. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" tools:ignore="NestedWeights,UselessLeaf"
     android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:background="@drawable/w_bg" android:orientation="vertical" android:padding="16dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:gravity="center_vertical" android:paddingBottom="12dp">
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="Brain" android:textColor="#FFEEF0F2" android:textSize="13sp" android:textStyle="bold" />
+            android:text="@string/widget_title" android:textColor="#FFEEF0F2" android:textSize="13sp" android:textStyle="bold" />
         <TextView android:id="@+id/widget_hint" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Tap to talk" android:textColor="#FFC3C8CF" android:textSize="12sp" />
+            android:text="@string/widget_hint" android:textColor="#FFC3C8CF" android:textSize="12sp" />
     </LinearLayout>
     <LinearLayout android:id="@+id/w_row1" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
-        android:orientation="horizontal">
+        android:orientation="horizontal" android:baselineAligned="false">
         <LinearLayout android:id="@+id/w_slot1" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
             android:padding="14dp" android:clickable="true" android:focusable="true">
@@ -41,7 +43,7 @@
     </LinearLayout>
     <FrameLayout android:id="@+id/w_rowgap" android:layout_width="match_parent" android:layout_height="10dp" />
     <LinearLayout android:id="@+id/w_row2" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
-        android:orientation="horizontal">
+        android:orientation="horizontal" android:baselineAligned="false">
         <LinearLayout android:id="@+id/w_slot3" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:background="@drawable/w_panel" android:orientation="vertical"
             android:padding="14dp" android:clickable="true" android:focusable="true">
@@ -69,6 +71,6 @@
         </LinearLayout>
     </LinearLayout>
     <TextView android:id="@+id/widget_last" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:paddingTop="10dp" android:text="No captures yet" android:textColor="#FFC3C8CF" android:textSize="12sp"
+        android:paddingTop="10dp" android:text="@string/widget_empty" android:textColor="#FFC3C8CF" android:textSize="12sp"
         android:maxLines="1" android:ellipsize="end" />
 </LinearLayout>
