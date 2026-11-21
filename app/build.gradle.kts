@@ -46,7 +46,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // LiteRT-LM is built with a newer Kotlin than this project (2.0).
+        freeCompilerArgs += "-Xskip-metadata-version-check"
+    }
     buildFeatures { compose = true }
     packaging { jniLibs { useLegacyPackaging = false } }
 }
@@ -70,4 +74,7 @@ dependencies {
     // Same inference stack as Whisper+ / RTranslator
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.12.4")
+
+    // Gemma 4 on the phone for voice cleanup (no network use).
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.19.1")
 }

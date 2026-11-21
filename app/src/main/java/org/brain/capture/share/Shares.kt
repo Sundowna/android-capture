@@ -44,8 +44,11 @@ object Shares {
     private fun dir(ctx: Context, id: String) = File(ctx.filesDir, "shares/$id")
     private fun metaFile(dir: File) = File(dir, "meta.json")
 
-    /** Copies everything out of the share intent. [progress] gets 0..1 when sizes are known, else null. */
-    suspend fun stage(ctx: Context, intent: Intent, sourceApp: String?, progress: (Float?) -> Unit): Capture =
+    /**
+     * Copies everything out of the share intent. [progress] gets 0..1 when sizes are known, else null.
+     * [sourceName] replaces the app name looked up from [sourceApp] (the Photo button says "Camera").
+     */
+    suspend fun stage(ctx: Context, intent: Intent, sourceApp: String?, sourceName: String? = null, progress: (Float?) -> Unit): Capture =
         withContext(Dispatchers.IO) {
             val cr = ctx.contentResolver
             val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
@@ -55,7 +58,7 @@ object Shares {
             val id = UUID.randomUUID().toString()
             val d = dir(ctx, id).apply { mkdirs() }
             val meta = JSONObject().put("sourceApp", sourceApp ?: "")
-                .put("sourceName", Previews.appName(ctx, sourceApp) ?: "")
+                .put("sourceName", sourceName ?: Previews.appName(ctx, sourceApp) ?: "")
             val files = JSONArray()
             var fingerprint: String? = null
             val kind: String
@@ -156,6 +159,27 @@ object Shares {
                     metaFile(d).writeText(meta.toString())
                 }
 
+                // Added to an existing note (picked in the share panel): append, don't make a new note.
+                val target = c.appendTo?.let { dao.get(it) }
+                if (target != null) {
+                    val path = org.brain.capture.pipeline.Notes.locate(ctx, vault, target)
+                        ?: throw VaultUnavailableException("The note to add to was not found")
+                    val source = NoteBuilder.Source(meta.optString("sourceName").ifEmpty { null }, meta.optString("sourceApp").ifEmpty { null })
+                    val heading = NoteBuilder.shareAdditionHeading(at, source)
+                    val already = vault.read(path)?.contains(heading) == true
+                    if (!already && !vault.append(path, addition(c, meta, at, source)))
+                        throw VaultUnavailableException("The note to add to was not found")
+                    val now = System.currentTimeMillis()
+                    c = c.copy(state = CaptureStates.SAVED, appended = true, notePath = null, error = null, details = details(meta),
+                        transcript = noteText(c, meta), lastActivityAt = now)
+                    dao.upsert(c)
+                    dao.touch(target.id, now)
+                    org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Added(c.id))
+                    org.brain.capture.pipeline.Notes.forget(target.id)
+                    d.deleteRecursively()
+                    return@withContext path
+                }
+
                 val folder = "$inbox/" + when (c.kind) { "link" -> "Links"; "text" -> "Text"; else -> "Documents" }
                 val path = vault.findNoteById(c.id, maxFiles = 500, startFolder = folder) ?: run {
                     val (base, note) = buildNote(c, meta, at)
@@ -165,6 +189,7 @@ object Shares {
                 c = c.copy(state = CaptureStates.SAVED, notePath = path, error = null, details = details(meta),
                     transcript = noteText(c, meta), lastActivityAt = System.currentTimeMillis())
                 dao.upsert(c)
+                org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Created(c.id))
                 d.deleteRecursively()
                 path
             } catch (t: Throwable) {
@@ -198,13 +223,24 @@ object Shares {
             else -> {
                 val files = meta.getJSONArray("files")
                 val list = (0 until files.length()).map { files.getJSONObject(it) }
-                val kind = ShareParse.fileKind(list.map { it.optString("mime") })
-                val label = list.firstOrNull()?.optString("name")?.substringBeforeLast('.')?.ifEmpty { null } ?: title
+                // Photo button: "2026-11-21 14.32.05 Photo", not the photo's own dated file name again.
+                val photo = meta.optString("sourceName") == org.brain.capture.ui.Photos.SOURCE
+                val kind = if (photo) "Photo" else ShareParse.fileKind(list.map { it.optString("mime") })
+                val label = if (photo) null else list.firstOrNull()?.optString("name")?.substringBeforeLast('.')?.ifEmpty { null } ?: title
                 NoteBuilder.baseName(at, kind, label) to NoteBuilder.fileNote(
                     c.id, at, list.map { NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256"), it.optInt("pages", -1)) },
                     text, source)
             }
         }
+    }
+
+    private fun addition(c: Capture, meta: JSONObject, at: OffsetDateTime, source: NoteBuilder.Source): String {
+        val files = meta.getJSONArray("files")
+        val list = (0 until files.length()).map { files.getJSONObject(it) }.map {
+            NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256"), it.optInt("pages", -1))
+        }
+        return NoteBuilder.shareAddition(at, source, c.kind, meta.optString("url").ifEmpty { null },
+            meta.optString("title").ifEmpty { null }, meta.optString("text").ifEmpty { null }, list)
     }
 
     /** What the card shows for a share: where it came from and which files were saved. */

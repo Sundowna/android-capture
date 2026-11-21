@@ -36,6 +36,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,23 +53,89 @@ import org.brain.capture.Prefs
 import org.brain.capture.Housekeeping
 import org.brain.capture.transcribe.ModelStore
 
+/** The pages of Settings, in menu order. */
+private enum class Page(val title: String) {
+    Types("Capture types"), Widget("Widget"), Vault("Vault"), Transcription("Transcription"),
+    Display("Audio & display"), Storage("Storage"), About("About & privacy"),
+}
+
+/**
+ * Settings: a short menu, one row per area with what is set now; each row opens its own page.
+ * Back on a page returns to the menu, back on the menu leaves Settings.
+ */
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
+    var page by rememberSaveable { mutableStateOf<Page?>(null) }
+    BackHandler { if (page != null) page = null else onBack() }
+
+    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+        Row(Modifier.padding(start = 8.dp, top = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { if (page != null) page = null else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            Text(page?.title ?: "Settings", style = MaterialTheme.typography.headlineSmall)
+        }
+        androidx.compose.animation.AnimatedContent(page, label = "settingsPage", transitionSpec = {
+            val forward = targetState != null
+            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(260)) { if (forward) it / 6 else -it / 6}) togetherWith
+                androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160))
+        }) { p ->
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                if (p == null) Menu { page = it } else PageContent(p)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Menu(open: (Page) -> Unit) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
+    val profiles by remember { org.brain.capture.types.Profiles.flow(ctx) }.collectAsState()
+    var storage by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(Unit) { storage = withContext(Dispatchers.IO) { Housekeeping.usage(ctx).let { it.model + it.staging + it.thumbs + it.database } } }
+    val types = profiles.orEmpty()
+    val language = when (prefs.language) { "de" -> "Deutsch"; "en" -> "English"; else -> "Auto language" }
+    val summary = mapOf(
+        Page.Types to "${types.size} types · default ${org.brain.capture.types.Profiles.primary(ctx).name}",
+        Page.Widget to types.filter { it.onWidget }.joinToString(", ") { it.name }.ifEmpty { "No buttons" },
+        Page.Vault to listOfNotNull(prefs.vaultUri?.lastPathSegment?.substringAfter(':')?.substringAfterLast('/') ?: "Not selected", prefs.inboxFolder).joinToString(" · "),
+        Page.Transcription to (if (ModelStore(ctx).isInstalled()) "Whisper small" else "Model not installed") + " · " + language,
+        Page.Display to (if (prefs.audioFormat == "wav") "WAV" else "Opus") + " · ${prefs.cardCount} notes shown" +
+            (if (prefs.shareAudio) "" else " · share without recording"),
+        Page.Storage to (storage?.let { android.text.format.Formatter.formatShortFileSize(ctx, it) + " on this phone" } ?: "…"),
+        Page.About to "No internet, no accounts",
+    )
+    // One panel, rows divided by hairlines.
+    androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp), color = Ink.Panel) {
+        Column {
+            Page.entries.forEachIndexed { i, p ->
+                if (i > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(start = 18.dp), color = Ink.Line)
+                Row(Modifier.fillMaxWidth().clickable { open(p) }.heightIn(min = 64.dp).padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(p.title, style = MaterialTheme.typography.titleMedium, color = Ink.Text)
+                        Text(summary[p].orEmpty(), style = MaterialTheme.typography.bodySmall, color = Ink.TextDim,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                    Text("›", fontSize = 24.sp, color = Ink.TextDim, modifier = Modifier.padding(start = 12.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageContent(p: Page) {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
     val scope = rememberCoroutineScope()
-
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Text("Settings", style = MaterialTheme.typography.headlineSmall)
-        }
-
-        Section("Vault") {
+    when (p) {
+        Page.Types -> CaptureTypesSettings(part = TypesPart.Types)
+        Page.Widget -> CaptureTypesSettings(part = TypesPart.Widget)
+        Page.Vault -> {
             VaultSetup()
             var inbox by remember { mutableStateOf(prefs.inboxFolder) }
             OutlinedTextField(
@@ -73,24 +145,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
         }
-
-        Section("Transcription") {
-            ModelSetup()
-            LanguageSetup()
-        }
-
-        Section("Main screen") {
-            Text("Notes shown before “Load more”", style = MaterialTheme.typography.bodyMedium)
-            Choice(listOf(5 to "5", 10 to "10", 20 to "20"), prefs.cardCount) { prefs.cardCount = it }
-        }
-
-        Section("Audio in the vault") {
+        Page.Transcription -> { ModelSetup(); LanguageSetup() }
+        Page.Display -> {
+            Text("Audio in the vault", style = MaterialTheme.typography.titleSmall)
             Choice(listOf("opus" to "Opus (small)", "wav" to "WAV (lossless)"), prefs.audioFormat) { prefs.audioFormat = it }
-            Text("Opus is about an eighth of the size and clear for speech. Transcription always uses the full-quality recording.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Hint("Opus is about an eighth of the size and clear for speech. Transcription always uses the full-quality recording.")
+            Text("Notes on the home screen", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Choice(listOf(5 to "5", 10 to "10", 20 to "20"), prefs.cardCount) { prefs.cardCount = it }
+            Hint("How many show before “Show more”.")
+            Text("Sharing a note", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Choice(listOf(true to "With voice recording", false to "Without"), prefs.shareAudio) { prefs.shareAudio = it }
+            Hint("What the share button on a card sends: the note's text and photos always, the voice recording only if you choose “With”.")
         }
-
-        Section("Storage on this phone") {
+        Page.Storage -> {
             var usage by remember { mutableStateOf<Housekeeping.Usage?>(null) }
             var cleaned by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(cleaned) { usage = withContext(Dispatchers.IO) { Housekeeping.usage(ctx) } }
@@ -106,27 +173,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                 scope.launch { cleaned = withContext(Dispatchers.IO) { Housekeeping.clean(ctx) } }
             }) { Text("Clean up leftovers") }
             cleaned?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            Text("Recordings and shares that are not in the vault yet are never deleted here.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Hint("Recordings and shares that are not in the vault yet are never deleted here.")
         }
-
-        Section("Privacy") {
-            Text("This app has no internet permission. Recordings, transcripts and shared files stay on this phone " +
-                "and in your vault folder; only your own sync tool moves them further. No accounts, no tracking.",
-                style = MaterialTheme.typography.bodySmall)
-        }
+        Page.About -> Text("This app has no internet permission. Recordings, transcripts and shared files stay on this phone " +
+            "and in your vault folder; only your own sync tool moves them further. No accounts, no tracking.",
+            style = MaterialTheme.typography.bodyMedium, color = Ink.TextSoft)
     }
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            content()
-        }
-    }
-}
+private fun Hint(text: String) =
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
 private fun StorageLine(label: String, bytes: Long) {

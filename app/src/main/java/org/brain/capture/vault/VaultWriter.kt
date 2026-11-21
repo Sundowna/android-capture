@@ -130,25 +130,46 @@ class VaultWriter(context: Context, private val tree: Uri) {
      * own trash when that folder is the vault root), so it can still be restored. Returns false if
      * the file does not exist.
      */
-    fun trash(path: String): Boolean {
-        val src = locate(path) ?: return false
-        val parentId = findPath(path.substringBeforeLast('/', "")) ?: return false
+    fun trash(path: String): Boolean = trashTo(path) != null
+
+    /** Like [trash], but returns where the file now is (".trash/<name>"), for Undo; null if it did not exist. */
+    fun trashTo(path: String): String? {
+        val src = locate(path) ?: return null
+        val parentId = findPath(path.substringBeforeLast('/', "")) ?: return null
         val trashId = ensureDir(".trash")
-        val name = path.substringAfterLast('/')
-        val free = uniqueName(trashId, name.substringBeforeLast('.'), name.substringAfterLast('.'))
-        var doc = src
-        if (free != name) doc = DocumentsContract.renameDocument(cr, doc, free) ?: throw VaultUnavailableException("Cannot rename $name")
-        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, parentId)
-        val target = DocumentsContract.buildDocumentUriUsingTree(tree, trashId)
+        return ".trash/" + moveInto(src, parentId, trashId, path.substringAfterLast('/'))
+    }
+
+    /**
+     * Undo of [trashTo]: moves [trashPath] back to [original] (its folder is made again if needed).
+     * Returns the path it ended up at (another name if the old one was taken meanwhile), or null.
+     */
+    fun restore(trashPath: String, original: String): String? {
+        val src = locate(trashPath) ?: return null
+        val trashId = findPath(trashPath.substringBeforeLast('/', "")) ?: return null
+        val folder = original.substringBeforeLast('/', "")
+        val dirId = ensureDir(folder)
+        val name = moveInto(src, trashId, dirId, original.substringAfterLast('/'))
+        return if (folder.isEmpty()) name else "$folder/$name"
+    }
+
+    /** Moves [doc] from [fromId] to [toId] as [wanted] (or a free variant of it); returns the name used. */
+    private fun moveInto(doc0: Uri, fromId: String, toId: String, wanted: String): String {
+        val free = uniqueName(toId, wanted.substringBeforeLast('.'), wanted.substringAfterLast('.'))
+        val current = cr.query(doc0, arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
+        var doc = doc0
+        if (free != current) doc = DocumentsContract.renameDocument(cr, doc, free) ?: throw VaultUnavailableException("Cannot rename $current")
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, fromId)
+        val target = DocumentsContract.buildDocumentUriUsingTree(tree, toId)
         val moved = runCatching { DocumentsContract.moveDocument(cr, doc, parent, target) }.getOrNull()
         if (moved == null) {
-            // Provider without move support: copy into the trash, then remove the original.
+            // Provider without move support: copy, then remove the original.
             val copy = DocumentsContract.createDocument(cr, target, cr.getType(doc) ?: "application/octet-stream", free)
-                ?: throw VaultUnavailableException("Cannot move $name to the trash")
+                ?: throw VaultUnavailableException("Cannot move $free")
             cr.openInputStream(doc)!!.use { i -> cr.openOutputStream(copy)!!.use { o -> i.copyTo(o) } }
             DocumentsContract.deleteDocument(cr, doc)
         }
-        return true
+        return free
     }
 
     /** Removes temp files left behind by an interrupted write. */

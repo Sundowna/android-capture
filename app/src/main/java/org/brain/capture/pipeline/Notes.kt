@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.brain.capture.Prefs
+import org.brain.capture.cleanup.CleanupText
 import org.brain.capture.data.Capture
 import org.brain.capture.data.CaptureDb
 import org.brain.capture.data.CaptureStates
@@ -27,9 +28,13 @@ data class NoteView(val text: String, val fromVault: Boolean, val missing: Boole
  */
 object Notes {
     private const val TAG = "Notes"
+    private val AUDIO_EXTENSIONS = setOf("ogg", "opus", "wav", "m4a", "mp3", "aac", "flac", "webm", "3gp", "amr")
     private val cache = ConcurrentHashMap<String, NoteView>()
 
     fun cached(id: String): NoteView? = cache[id]
+
+    /** Drops the card's copy so it reloads the note from the vault. */
+    fun forget(id: String) { cache.remove(id) }
 
     /** Current path of [c]'s note; finds it by capture_id if it was moved or renamed. */
     suspend fun locate(ctx: Context, vault: VaultWriter, c: Capture): String? {
@@ -44,12 +49,17 @@ object Notes {
 
     /** Loads the live note text for a card. Falls back to the app's copy if the vault can't be read. */
     suspend fun load(ctx: Context, c: Capture): NoteView = withContext(Dispatchers.IO) {
+        if (c.isPrivate) {
+            // Private captures live in the app only; show the clean version when there is one.
+            val text = c.clean?.let(CleanupText::storedForDisplay) ?: c.transcript.orEmpty()
+            return@withContext NoteView(text, fromVault = false).also { cache[c.id] = it }
+        }
         val view = runCatching {
             val vault = vault(ctx)
             val path = locate(ctx, vault, c)
             val text = path?.let { vault.read(it) }
             if (text == null) NoteView(c.transcript.orEmpty(), fromVault = false, missing = true)
-            else NoteView(NoteText.display(text), fromVault = true)
+            else NoteView(CleanupText.forDisplay(NoteText.display(text)), fromVault = true)
         }.getOrElse { NoteView(c.transcript.orEmpty(), fromVault = false) }
         cache[c.id] = view
         view
@@ -151,7 +161,10 @@ object Notes {
             val folder = path.substringBeforeLast('/', "")
             val inbox = Prefs(ctx).inboxFolder
             val names = Regex("""!\[\[([^\]|#]+)""").findAll(note).map { it.groupValues[1].trim() }.distinct()
+            // Settings → Display: voice recordings can be left out of what is shared.
+            val withAudio = Prefs(ctx).shareAudio
             for (name in names) {
+                if (!withAudio && name.substringAfterLast('.', "").lowercase() in AUDIO_EXTENSIONS) continue
                 val candidates = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name", name)
                     .map { it.trimStart('/') }.distinct()
                 val uri = candidates.firstNotNullOfOrNull { runCatching { vault.uriOf(it) }.getOrNull() } ?: continue
@@ -171,30 +184,104 @@ object Notes {
      * vault's `.trash` folder, and the app forgets the capture. Embeds the user added in Obsidian
      * are left alone, since other notes may use them.
      */
-    suspend fun delete(ctx: Context, c: Capture) = withContext(Dispatchers.IO) {
-        val vault = vault(ctx)
+    /**
+     * Undo for an addition: its "Added 21:50:39" section comes out of the note (only if it is still
+     * there as the app wrote it), its recording goes to the vault's .trash, and the app forgets it.
+     */
+    /** Vault names of the files a share or photo saved (empty for voice and text). */
+    private fun sharedFiles(c: Capture): List<String> = runCatching {
+        val f = org.json.JSONObject(c.details ?: "{}").optJSONArray("files") ?: return@runCatching emptyList()
+        (0 until f.length()).mapNotNull { f.getJSONObject(it).optString("name").ifEmpty { null } }
+    }.getOrDefault(emptyList())
+
+    suspend fun deleteAddition(ctx: Context, a: Capture) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
+        val owner = a.appendTo?.let { dao.get(it) } ?: error("Note not found")
+        if (owner.isPrivate) { dao.deleteWithAdditions(a.id); dao.touch(owner.id, System.currentTimeMillis()); cache.remove(owner.id); return@withContext }
+        val vault = vault(ctx)
+        val path = locate(ctx, vault, owner) ?: throw VaultUnavailableException("Note not found")
+        val note = vault.read(path) ?: throw VaultUnavailableException("Note not found")
+        val at = OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(a.createdAt), java.time.ZoneId.systemDefault())
+        val updated = NoteText.withoutAddition(note, at.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.ROOT)))
+            ?: error("This addition was changed in the note, so it was left as it is")
+        dao.putEdit(PendingEdit(owner.id, path, note, updated))
+        vault.overwrite(path, updated)
+        dao.clearEdit(owner.id)
+        // Its audio, or the photos and files it added, go to .trash with it.
+        (listOfNotNull(a.audioVaultName) + sharedFiles(a)).distinct().forEach { name ->
+            val folder = path.substringBeforeLast('/', "")
+            listOf("$folder/Attachments/$name", "$folder/$name", "${Prefs(ctx).inboxFolder}/Attachments/$name")
+                .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
+        }
+        dao.deleteWithAdditions(a.id)
+        dao.touch(owner.id, System.currentTimeMillis())
+        cache.remove(owner.id)
+        Log.i(TAG, "Took back addition ${a.id} from $path")
+    }
+
+    /**
+     * Deletes a note: vault files go to `.trash`, private audio is held back in app storage. The
+     * home screen's Undo can then put everything back ([restore]) until the next action replaces it.
+     * [undoable] = false when this delete is itself an undo (of a new note).
+     */
+    suspend fun delete(ctx: Context, c: Capture, undoable: Boolean = true) = withContext(Dispatchers.IO) {
+        val dao = CaptureDb.get(ctx).dao()
+        val rows = listOf(c) + dao.additions(c.id)
+        if (c.isPrivate) {
+            // Nothing in the vault: the app's own audio is held for Undo, then the capture is forgotten.
+            val held = rows.mapNotNull { a -> a.audioVaultName?.let { name ->
+                val f = File(ctx.filesDir, name)
+                val keep = File(Undo.holdDir(ctx), f.name)
+                if (f.exists() && (f.renameTo(keep) || run { f.copyTo(keep, true); f.delete() })) keep.path to f.path else null
+            } }
+            dao.deleteWithAdditions(c.id)
+            cache.remove(c.id)
+            Log.i(TAG, "Deleted private capture ${c.id}")
+            if (undoable) Undo.record(Undo.Action.Deleted(c.id, rows, emptyList(), held))
+            else held.forEach { File(it.first).delete() }
+            return@withContext
+        }
+        val vault = vault(ctx)
         val path = locate(ctx, vault, c)
+        val moves = ArrayList<Pair<String, String>>() // (where it is in .trash, where it was)
         val own = buildList {
             c.audioVaultName?.let(::add)
-            dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add) }
-            runCatching {
-                val f = org.json.JSONObject(c.details ?: "{}").optJSONArray("files")
-                if (f != null) for (i in 0 until f.length()) f.getJSONObject(i).optString("name").takeIf { it.isNotEmpty() }?.let(::add)
-            }
+            addAll(sharedFiles(c))
+            dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add); addAll(sharedFiles(a)) }
         }.distinct()
         val folder = path?.substringBeforeLast('/', "") ?: c.notePath?.substringBeforeLast('/', "") ?: ""
         val inbox = Prefs(ctx).inboxFolder
         for (name in own) {
             val moved = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name")
-                .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
+                .map { it.trimStart('/') }.distinct().any { p ->
+                    runCatching { vault.trashTo(p) }.getOrNull()?.also { moves += it to p } != null
+                }
             if (!moved) Log.w(TAG, "Attachment not found for delete: $name")
         }
-        if (path != null) vault.trash(path)
+        if (path != null) vault.trashTo(path)?.let { moves += it to path }
         dao.clearEdit(c.id)
         dao.deleteWithAdditions(c.id)
         cache.remove(c.id)
         Log.i(TAG, "Deleted capture ${c.id} (${own.size} file(s)) to .trash")
+        if (undoable) Undo.record(Undo.Action.Deleted(c.id, rows.map { if (it.id == c.id && path != null) it.copy(notePath = path) else it }, moves, emptyList()))
+    }
+
+    /** Undo of [delete]: files back from `.trash` (or app storage), rows back in the database. */
+    suspend fun restore(ctx: Context, d: Undo.Action.Deleted) = withContext(Dispatchers.IO) {
+        val dao = CaptureDb.get(ctx).dao()
+        var rows = d.rows
+        if (d.moves.isNotEmpty()) {
+            val vault = vault(ctx)
+            for ((trashed, original) in d.moves) {
+                val now = vault.restore(trashed, original) ?: throw VaultUnavailableException("Not in the vault's .trash any more: ${original.substringAfterLast('/')}")
+                // Its old name was taken meanwhile: the note row follows the file.
+                if (now != original) rows = rows.map { if (it.notePath == original) it.copy(notePath = now) else it }
+            }
+        }
+        d.held.forEach { (kept, original) -> File(kept).let { f -> if (!f.renameTo(File(original))) { f.copyTo(File(original), true); f.delete() } } }
+        rows.forEach { dao.upsert(it) }
+        rows.forEach { cache.remove(it.id) }
+        Log.i(TAG, "Restored capture ${d.id}")
     }
 
     private fun vault(ctx: Context): VaultWriter =

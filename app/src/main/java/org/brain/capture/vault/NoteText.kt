@@ -22,6 +22,22 @@ object NoteText {
         split(note).second.lines().filterNot { EMBED_LINE.matches(it) }
             .joinToString("\n").replace(Regex("""\n{3,}"""), "\n\n").trim()
 
+    /**
+     * The note without the addition whose heading starts "**Added [time]" (time as HH:mm:ss): from the
+     * blank line before that heading up to the next addition, or the end. Null if not found exactly once.
+     */
+    fun withoutAddition(note: String, time: String): String? {
+        val text = note.replace("\r\n", "\n")
+        val marker = "\n**Added $time"
+        val at = text.indexOf(marker)
+        if (at < 0 || text.indexOf(marker, at + 1) >= 0) return null
+        val start = at + 1 // the heading line itself
+        val next = text.indexOf("\n**Added ", start).let { if (it < 0) text.length else it + 1 }
+        val before = text.substring(0, start).trimEnd()
+        val after = text.substring(next).trimEnd()
+        return before + (if (after.isEmpty()) "" else "\n\n$after") + "\n"
+    }
+
     /** The note with its body replaced; frontmatter is kept exactly as it was. */
     fun withBody(note: String, body: String): String {
         val front = split(note).first

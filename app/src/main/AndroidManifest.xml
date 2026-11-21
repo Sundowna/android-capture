@@ -7,9 +7,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16+: lets the recording show as a "Live Update" chip with its timer in the status bar. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Keeps the CPU running while transcribing with the screen off. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Attach → Location only: asked the first time it is used; one spot is saved, nothing is tracked. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Lets the app show "Shared from Files" instead of a package name. Not a permission:
          it only makes apps with a launcher icon visible to name lookups. -->
@@ -22,7 +27,8 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_brainplay"
+        android:roundIcon="@mipmap/ic_brainplay"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Capture"
@@ -31,6 +37,7 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -38,12 +45,83 @@
             </intent-filter>
         </activity>
 
+        <!-- Screen 5: the capture screen. Opened by the widget, the quick settings tile and the app. -->
+        <activity
+            android:name=".ui.CaptureActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.capture"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Capture" />
+
+        <!-- Screen 8: home-screen widget with one button per capture type. -->
+        <receiver
+            android:name=".ui.BrainWidget"
+            android:exported="false"
+            android:label="Brain">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_brain_info" />
+        </receiver>
+
+        <!-- 1x1 widget: one capture type per button; pick the type when placing it. -->
+        <receiver
+            android:name=".ui.ButtonWidget"
+            android:exported="false"
+            android:label="Brain button">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_button_info" />
+        </receiver>
+        <activity
+            android:name=".ui.ButtonWidgetSetupActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.buttonsetup"
+            android:theme="@style/Theme.Capture">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Long-press the widget → Edit widget: choose its buttons, edit capture types. -->
+        <activity
+            android:name=".ui.WidgetSetupActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.widgetsetup"
+            android:theme="@style/Theme.Capture">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Quick settings tile: talk from anywhere, the lock screen included. -->
+        <service
+            android:name=".ui.BrainTile"
+            android:exported="true"
+            android:icon="@drawable/ic_mic"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="false" />
+        </service>
+
         <!-- Second home-screen icon: one tap starts recording, the next tap stops it. -->
         <activity
             android:name=".ui.QuickRecordActivity"
             android:exported="true"
             android:excludeFromRecents="true"
-            android:icon="@drawable/ic_record_launcher"
+            android:icon="@mipmap/ic_talk"
             android:label="@string/quick_record"
             android:launchMode="singleInstance"
             android:noHistory="true"
@@ -54,6 +132,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Photo from a widget or app-icon shortcut: the phone's camera, then the share panel. -->
+        <activity
+            android:name=".ui.PhotoActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.photo"
+            android:theme="@style/Theme.Capture.Panel" />
 
         <!-- Android Share menu: links, text, PDFs, images and other files. -->
         <activity
@@ -76,6 +162,10 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!-- GPU access for Gemma (LiteRT-LM); optional, CPU works without. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
         <!-- Hands copies of a shared card's files to the app the user picks; read-only, per share. -->
         <provider

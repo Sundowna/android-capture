@@ -55,7 +55,22 @@ data class Capture(
     val appended: Boolean = false,
     val error: String? = null,
     val lastActivityAt: Long = createdAt,
-)
+    /** Voice cleanup outcome: null = not tried yet, else "done", "rejected: …", "skipped: …" or "failed: …". */
+    val cleanup: String? = null,
+    /** Capture type: "idea" (tidy into bullets), "task" (checklist + due date) or "private". */
+    val type: String = "idea",
+    /** Clean version from the cleanup step (markdown bullets, with a "# Title" first line). */
+    val clean: String? = null,
+) {
+    /** Private captures stay inside the app: never written to the vault. */
+    val isPrivate: Boolean get() = org.brain.capture.types.Profiles.isPrivateId(type)
+}
+
+object CaptureTypes {
+    const val IDEA = "idea"
+    const val TASK = "task"
+    const val PRIVATE = "private"
+}
 
 /** Backup taken before the app rewrites a note, so an interrupted edit can be undone. */
 @Entity(tableName = "pending_edits")
@@ -74,11 +89,11 @@ interface CaptureDao {
     @Query("SELECT * FROM captures WHERE notePath = :path LIMIT 1") suspend fun byNote(path: String): Capture?
 
     /** Notes shown as cards: saved captures with their own note, most recently active first. */
-    @Query("""SELECT * FROM captures WHERE state = 'saved' AND appendTo IS NULL AND notePath IS NOT NULL
+    @Query("""SELECT * FROM captures WHERE state = 'saved' AND appendTo IS NULL AND (notePath IS NOT NULL OR type = 'private')
               ORDER BY lastActivityAt DESC LIMIT :limit""")
     fun cards(limit: Int): Flow<List<Capture>>
 
-    @Query("SELECT COUNT(*) FROM captures WHERE state = 'saved' AND appendTo IS NULL AND notePath IS NOT NULL")
+    @Query("SELECT COUNT(*) FROM captures WHERE state = 'saved' AND appendTo IS NULL AND (notePath IS NOT NULL OR type = 'private')")
     fun cardCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM captures") suspend fun count(): Int
@@ -100,12 +115,38 @@ interface CaptureDao {
     @Query("UPDATE captures SET lastActivityAt = :at WHERE id = :id") suspend fun touch(id: String, at: Long)
     @Query("UPDATE captures SET notePath = :path WHERE id = :id") suspend fun moveNote(id: String, path: String)
 
+    /** Recent voice notes and additions to notes that have not been through the cleanup step yet. */
+    @Query("""SELECT * FROM captures WHERE kind = 'voice' AND state = 'saved' AND cleanup IS NULL
+              AND ((appendTo IS NULL AND (notePath IS NOT NULL OR type = 'private')) OR (appendTo IS NOT NULL AND appended = 1))
+              AND createdAt >= :since ORDER BY createdAt""")
+    suspend fun pendingCleanup(since: Long): List<Capture>
+    @Query("UPDATE captures SET cleanup = :result WHERE id = :id") suspend fun setCleanup(id: String, result: String)
+    @Query("UPDATE captures SET clean = :clean WHERE id = :id") suspend fun setClean(id: String, clean: String)
+    @Query("UPDATE captures SET type = :type WHERE id = :id") suspend fun setType(id: String, type: String)
+    /** Forgets the clean version, so the screen shows "Cleaning" while a new one is made. */
+    @Query("UPDATE captures SET clean = NULL, cleanup = NULL WHERE id = :id") suspend fun clearClean(id: String)
+    /** Puts back a clean version (e.g. when a re-clean with another type did not pass the check). */
+    @Query("UPDATE captures SET clean = :clean, cleanup = :cleanup WHERE id = :id")
+    suspend fun restoreClean(id: String, clean: String?, cleanup: String?)
+    /** The note a share is added to; kept on the row so a retry adds it to the same note. */
+    @Query("UPDATE captures SET appendTo = :target WHERE id = :id") suspend fun setAppendTo(id: String, target: String)
+    /** Notes a share can be added to: saved, in the vault (not private), most recently active first. */
+    @Query("""SELECT * FROM captures WHERE state = 'saved' AND appendTo IS NULL AND notePath IS NOT NULL
+              AND type != 'private' ORDER BY lastActivityAt DESC LIMIT :limit""")
+    suspend fun notesToAddTo(limit: Int): List<Capture>
+    /** Live view of one capture, for the capture screen. */
+    @Query("SELECT * FROM captures WHERE id = :id") fun watch(id: String): Flow<Capture?>
+    /** Live list of the recordings and text added to a note, oldest first. */
+    @Query("SELECT * FROM captures WHERE appendTo = :id AND state != 'discarded' ORDER BY createdAt") fun watchAdditions(id: String): Flow<List<Capture>>
+    /** The newest saved capture, for the widget and the quick settings tile. */
+    @Query("SELECT * FROM captures WHERE state = 'saved' ORDER BY createdAt DESC LIMIT 1") suspend fun latest(): Capture?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putEdit(e: PendingEdit)
     @Query("DELETE FROM pending_edits WHERE captureId = :id") suspend fun clearEdit(id: String)
     @Query("SELECT * FROM pending_edits") suspend fun pendingEdits(): List<PendingEdit>
 }
 
-@Database(entities = [Capture::class, PendingEdit::class], version = 3, exportSchema = false)
+@Database(entities = [Capture::class, PendingEdit::class], version = 5, exportSchema = false)
 abstract class CaptureDb : RoomDatabase() {
     abstract fun dao(): CaptureDao
 
@@ -123,10 +164,23 @@ abstract class CaptureDb : RoomDatabase() {
             }
         }
 
+        private val V3_TO_V4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE captures ADD COLUMN cleanup TEXT")
+            }
+        }
+
+        private val V4_TO_V5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE captures ADD COLUMN type TEXT NOT NULL DEFAULT 'idea'")
+                db.execSQL("ALTER TABLE captures ADD COLUMN clean TEXT")
+            }
+        }
+
         @Volatile private var instance: CaptureDb? = null
         fun get(ctx: Context): CaptureDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(ctx.applicationContext, CaptureDb::class.java, "captures.db")
-                .addMigrations(V1_TO_V2, V2_TO_V3).build()
+                .addMigrations(V1_TO_V2, V2_TO_V3, V3_TO_V4, V4_TO_V5).build()
                 .also { instance = it }
         }
     }

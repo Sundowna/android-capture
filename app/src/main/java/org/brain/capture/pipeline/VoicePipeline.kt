@@ -51,6 +51,7 @@ class VoicePipeline(private val context: Context) {
         CaptureState.live(null)
         try {
             if (c.transcript == null) c = transcribeStep(c, wav)
+            if (c.isPrivate) { savePrivate(c, wav); return }
             CaptureState.set(Phase.WritingVault)
             val vault = VaultWriter(context, prefs.vaultUri ?: throw VaultUnavailableException("No vault folder selected"))
             if (c.audioVaultName == null) c = audioStep(c, wav, vault)
@@ -61,6 +62,7 @@ class VoicePipeline(private val context: Context) {
             File(wav.parentFile, wav.nameWithoutExtension + ".append").delete()
 
             val target = c.appendTo?.let { dao.get(it) }
+            Undo.record(if (target != null) Undo.Action.Added(c.id) else Undo.Action.Created(c.id))
             CaptureState.live(null)
             CaptureState.set(Phase.Saved(target?.notePath ?: c.notePath ?: "", c.warning, appended = target != null,
                 captureId = target?.id ?: c.id))
@@ -73,6 +75,28 @@ class VoicePipeline(private val context: Context) {
             dao.upsert(c.copy(state = CaptureStates.FAILED, error = t.message))
             CaptureState.set(Phase.Failed(t.message ?: t.javaClass.simpleName, wav.path))
         }
+    }
+
+    /**
+     * Private captures never touch the vault: the audio goes to app storage as Opus, the
+     * transcript stays in the app's database, and the card shows it from there.
+     */
+    private suspend fun savePrivate(c0: Capture, wav: File) {
+        var c = c0
+        if (c.audioVaultName == null) {
+            val dir = File(context.filesDir, PRIVATE_DIR).apply { mkdirs() }
+            val ogg = File(dir, "${c.id}.ogg")
+            val ok = prefs.audioFormat != "wav" && runCatching { OpusEncoder.encode(wav, ogg); true }
+                .onFailure { Log.w(TAG, "Opus encoding failed, keeping WAV", it) }.getOrDefault(false)
+            val kept = if (ok) ogg else File(dir, "${c.id}.wav").also { wav.copyTo(it, overwrite = true) }
+            c = c.copy(audioVaultName = "$PRIVATE_DIR/${kept.name}")
+        }
+        c = c.copy(state = CaptureStates.SAVED, error = null, lastActivityAt = System.currentTimeMillis()).also { dao.upsert(it) }
+        wav.delete()
+        File(wav.path.removeSuffix(".wav") + ".ogg").delete()
+        Undo.record(if (c.appendTo != null) Undo.Action.Added(c.id) else Undo.Action.Created(c.id))
+        CaptureState.live(null)
+        CaptureState.set(Phase.Saved("", c.warning, captureId = c.id))
     }
 
     private suspend fun transcribeStep(c: Capture, wav: File): Capture {
@@ -100,6 +124,11 @@ class VoicePipeline(private val context: Context) {
         val store = ModelStore(context)
         if (!store.isInstalled()) error("Speech model not installed")
         CaptureState.set(Phase.LoadingModel)
+        // Background priority (Whisper's worker threads inherit it): the screen stays smooth.
+        return org.brain.capture.cleanup.GemmaHolder.background { transcribeWith(store, wav, profile, seconds, captureId) }
+    }
+
+    private fun transcribeWith(store: ModelStore, wav: File, profile: WavReader.Profile, seconds: Double, captureId: String): LastResult {
         val t0 = SystemClock.elapsedRealtime()
         WhisperOnnx(store.dir).use { whisper ->
             val loadMs = SystemClock.elapsedRealtime() - t0
@@ -181,6 +210,7 @@ class VoicePipeline(private val context: Context) {
                     model = "whisper-small-int8 (onnx)",
                     language = prefs.language,
                     warning = c.warning,
+                    type = c.type,
                 )
                 val name = vault.write("$inbox/Voice", NoteBuilder.baseName(at, "Voice", transcript), "md") {
                     it.write(note.toByteArray())
@@ -209,6 +239,8 @@ class VoicePipeline(private val context: Context) {
 
     companion object {
         private const val TAG = "VoicePipeline"
+        /** Folder in app storage for private recordings. */
+        const val PRIVATE_DIR = "private"
         /** Loudest 100 ms must reach about -48 dBFS; quiet speech is well above, room noise below. */
         private const val SPEECH_LEVEL = 0.004
     }

@@ -10,6 +10,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -83,10 +86,11 @@ private fun duration(sec: Double): String { val s = sec.toLong(); return "%d:%02
 
 /** The coloured square at the start of a card, telling at a glance what kind of capture it is. */
 @Composable
-private fun KindTile(kind: String, saved: Boolean) {
+private fun KindTile(kind: String, saved: Boolean, private: Boolean = false) {
     val b = brand()
     val (bg, fg, icon) = when {
         saved -> Triple(b.successBg, b.success, R.drawable.ic_check)
+        private -> Triple(Ink.Raised, Ink.TextStrong, R.drawable.ic_lock)
         kind == "link" -> Triple(b.linkBg, b.link, R.drawable.ic_link)
         kind == "text" -> Triple(b.voiceBg, b.voice, R.drawable.ic_text)
         kind == "file" -> Triple(b.fileBg, b.file, R.drawable.ic_doc)
@@ -106,7 +110,8 @@ private fun Meta(text: String, color: Color = MaterialTheme.colorScheme.onSurfac
  * appear here). [justSaved] turns the header green for a few seconds after saving.
  */
 @Composable
-fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit) {
+fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit, onOpen: (Capture) -> Unit = {},
+             onType: (Capture) -> Unit = {}, onEdit: (Capture) -> Unit = {}) {
     val ctx = LocalContext.current
     val b = brand()
     var view by remember(c.id) { mutableStateOf(Notes.cached(c.id)) }
@@ -118,26 +123,33 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
     val folder = c.notePath?.substringBeforeLast('/') ?: ""
 
     var expanded by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf(false) }
-    var typing by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    // Editing and adding happen on the note screen, never in a pop-up over the list.
+    val editing = { onEdit(c) }
     val scope = rememberCoroutineScope()
     val border by animateColorAsState(if (justSaved) b.success.copy(alpha = 0.5f) else Color.Transparent, label = "b")
 
-    Surface(shape = CardShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp,
-        border = BorderStroke(1.5.dp, border), modifier = Modifier.fillMaxWidth().animateContentSize()) {
+    // Tapping anywhere on the card opens the note; only its small action buttons do something else.
+    Surface(onClick = { onOpen(c) }, shape = CardShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp,
+        border = BorderStroke(1.5.dp, border), modifier = Modifier.fillMaxWidth().animateContentSize()
+            .semantics { onClick(label = "Open note") { onOpen(c); true } }) {
         Column(Modifier.padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Header: kind + where/when, or the fresh "saved" confirmation.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(end = 8.dp)) {
-                KindTile(c.kind, justSaved)
-                if (justSaved) Meta("Saved to $folder · just now", b.success)
-                else Meta(when (c.kind) {
+                KindTile(c.kind, justSaved, c.isPrivate)
+                if (justSaved) Meta(if (c.isPrivate) "Kept on this phone · just now" else "Saved to $folder · just now", b.success)
+                else Meta(when {
+                    c.isPrivate -> "Private · on this phone · ${relativeTime(c.lastActivityAt)}" +
+                        (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
+                    c.type != "idea" -> "${org.brain.capture.types.Profiles.get(ctx, c.type).name} · ${relativeTime(c.lastActivityAt)}" +
+                        (if (c.kind == "voice") " · ${duration(c.audioSeconds)}" else "")
+                    else -> when (c.kind) {
                     "voice" -> "Voice · ${relativeTime(c.lastActivityAt)} · ${duration(c.audioSeconds)}"
                     "link" -> "Link${source?.let { " from $it" } ?: ""} · ${relativeTime(c.createdAt)}"
                     "text" -> "Text${source?.let { " from $it" } ?: ""} · ${relativeTime(c.createdAt)}"
                     else -> fileMeta(ctx, c, source)
-                })
+                }})
             }
 
             if (view?.missing == true) Text("This note is no longer in the vault. Showing the app's copy.",
@@ -145,12 +157,13 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
             when (c.kind) {
                 "link" -> LinkBody(text)
                 "file" -> {
-                    SharedFiles(c)
+                    SharedFiles(c, onTap = { onOpen(c) })
                     val caption = text.lines().drop(1).joinToString("\n").trim() // first line is "Shared from …"
-                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true)
+                    // Tap opens the note (like every other card); long-press edits the caption.
+                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, editing, view?.fromVault == true, { onOpen(c) })
                 }
                 else -> when {
-                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, { editing = true }, view?.fromVault == true)
+                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, editing, view?.fromVault == true, { onOpen(c) })
                     view != null -> Text("(no speech recognised)", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(end = 8.dp))
@@ -164,27 +177,29 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 // Delete sits apart on the left, away from the everyday actions.
                 CardAction(painterResource(R.drawable.ic_delete), "Delete note") { deleting = true }
                 Box(Modifier.weight(1f))
-                CardAction(painterResource(R.drawable.ic_pencil), "Open in Obsidian") {
+                if (!c.isPrivate) CardAction(painterResource(R.drawable.ic_obsidian), "Open in Obsidian") {
                     val path = c.notePath
                     if (path == null || !openInObsidian(ctx, path))
                         Toast.makeText(ctx, "Could not open Obsidian. Is it installed?", Toast.LENGTH_SHORT).show()
                 }
-                CardAction(painterResource(R.drawable.ic_text_add), "Add typed text") { typing = true }
-                CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
+                if (!c.isPrivate) {
+                    // T+ opens the note ready to type; mic+ opens it and starts recording at once.
+                    CardAction(painterResource(R.drawable.ic_text_add), "Add typed text", enabled = canRecord) { onType(c) }
+                    CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
+                }
                 ShareAction(c)
                 CopyAction(text.ifBlank { null })
             }
         }
     }
 
-    if (editing) EditDialog(c, onDone = { editing = false; reload++ })
-    if (typing) TypeDialog(c, onDone = { typing = false; reload++ })
     if (deleting) {
         val attached = if (c.kind == "voice") "its recordings" else if (c.kind == "file") "its files" else null
         AlertDialog(
             onDismissRequest = { deleting = false },
             title = { Text("Delete this note?") },
-            text = { Text("The note${attached?.let { " and $it" } ?: ""} ${if (attached == null) "moves" else "move"} to the .trash folder in your vault, " +
+            text = { Text(if (c.isPrivate) "This private note${if (c.kind == "voice") " and its recording" else ""} will be deleted from this phone. It was never in your vault, so it can't be restored."
+                else "The note${attached?.let { " and $it" } ?: ""} ${if (attached == null) "moves" else "move"} to the .trash folder in your vault, " +
                 "where you can still restore them. Your sync tool will remove it on your other devices too.") },
             confirmButton = { TextButton(onClick = {
                 deleting = false
@@ -200,12 +215,17 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
 }
 
 @Composable
-private fun BodyText(text: String, expanded: Boolean, onExpand: (Boolean) -> Unit, onEdit: () -> Unit, editable: Boolean) {
+/** Tap opens the note (to read it whole and talk more into it); long-press edits the text. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun BodyText(text: String, expanded: Boolean, onExpand: (Boolean) -> Unit, onEdit: () -> Unit, editable: Boolean, onOpen: (() -> Unit)?) {
     var overflows by remember(text) { mutableStateOf(false) }
     SelectionContainer {
         Text(text, style = MaterialTheme.typography.bodyLarge, maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
-            modifier = Modifier.padding(end = 8.dp).clickable(enabled = editable, onClickLabel = "Edit note", onClick = onEdit))
+            modifier = Modifier.padding(end = 8.dp).then(
+                if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open note", onClick = onOpen,
+                    onLongClickLabel = "Edit note", onLongClick = if (editable) onEdit else null)
+                else Modifier.clickable(enabled = editable, onClickLabel = "Edit note", onClick = onEdit)))
     }
     if (overflows || expanded) TextButton(onClick = { onExpand(!expanded) }, contentPadding = PaddingValues(0.dp)) {
         Text(if (expanded) "Show less" else "Show all", fontWeight = FontWeight.SemiBold)
@@ -373,11 +393,11 @@ private fun fileMeta(ctx: android.content.Context, c: Capture, source: String?):
 
 /** Previews of images and PDF first pages; document names below. Tapping opens the note. */
 @Composable
-private fun SharedFiles(c: Capture) {
+internal fun SharedFiles(c: Capture, onTap: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     val list = files(c)
     if (list.isEmpty()) return
-    val open = { c.notePath?.let { openInObsidian(ctx, it) }; Unit }
+    val open = onTap ?: { c.notePath?.let { openInObsidian(ctx, it) }; Unit }
     val withThumb = list.filter { it.thumb.isNotEmpty() && File(it.thumb).exists() }
     if (withThumb.isNotEmpty()) Row(Modifier.padding(end = 8.dp).horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) { withThumb.forEach { Thumb(it, open) } }
@@ -396,82 +416,4 @@ private fun Thumb(f: FileInfo, onClick: () -> Unit) {
     val m = Modifier.height(if (f.mime == "application/pdf") 96.dp else 84.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
     bmp?.let { Image(it, contentDescription = f.name, modifier = m.aspectRatio(it.width.toFloat() / it.height.coerceAtLeast(1)),
         contentScale = ContentScale.Crop) } ?: Box(m.width(84.dp).background(MaterialTheme.colorScheme.surfaceVariant))
-}
-
-// ---- Dialogs ----
-
-/** In-app editing. Saves only if the note was not changed elsewhere since the editor opened. */
-@Composable
-private fun EditDialog(c: Capture, onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var original by remember { mutableStateOf<String?>(null) }
-    var body by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    LaunchedEffect(c.id) {
-        runCatching { Notes.openForEdit(ctx, c) }
-            .onSuccess { (b, o) -> body = b; original = o }
-            .onFailure { error = it.message }
-    }
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDone() },
-        title = { Text("Edit note") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (original == null && error == null) LinearProgressIndicator(Modifier.fillMaxWidth())
-                else OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth(), minLines = 6, enabled = !saving)
-                if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = original != null && !saving, onClick = {
-                saving = true; error = null
-                scope.launch {
-                    runCatching { Notes.saveEdit(ctx, c, original!!, body) }
-                        .onSuccess { ok ->
-                            if (ok) onDone()
-                            else error = "This note was changed in Obsidian while you were editing, so nothing was " +
-                                "saved. Your text is still here: copy it, or use the pencil to edit in Obsidian."
-                        }
-                        .onFailure { error = it.message }
-                    saving = false
-                }
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(enabled = !saving, onClick = onDone) { Text("Cancel") } },
-    )
-}
-
-/** Adds typed text to the end of the note. */
-@Composable
-private fun TypeDialog(c: Capture, onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDone() },
-        title = { Text("Add to note") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), minLines = 3, enabled = !saving,
-                    placeholder = { Text("Type what you want to add…") })
-                if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = text.isNotBlank() && !saving, onClick = {
-                saving = true; error = null
-                scope.launch {
-                    runCatching { Notes.appendTyped(ctx, c, text) }.onSuccess { onDone() }.onFailure { error = it.message }
-                    saving = false
-                }
-            }) { Text("Add") }
-        },
-        dismissButton = { TextButton(enabled = !saving, onClick = onDone) { Text("Cancel") } },
-    )
 }

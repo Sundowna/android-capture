@@ -25,10 +25,12 @@ object NoteBuilder {
         model: String,
         language: String,
         warning: String? = null,
+        type: String = "idea",
     ): String = buildString {
         appendLine("---")
         appendLine("type: capture")
         appendLine("source: voice")
+        if (type != "idea") appendLine("capture_type: $type")
         appendLine("captured: ${at.truncatedTo(java.time.temporal.ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)}")
         appendLine("duration: ${formatDuration(durationSec)}")
         appendLine("audio: \"[[${audioFile}]]\"")
@@ -137,6 +139,35 @@ object NoteBuilder {
             appendLine("![[${audioFile}]]")
         }
     }
+
+    /**
+     * What a share adds to an existing note: an "Added 20:28:14 · shared from Files" heading, then
+     * the link, text or files (PDFs and images inline). The heading also marks it as written, so an
+     * interrupted save never adds it twice.
+     */
+    fun shareAddition(at: OffsetDateTime, source: Source?, kind: String, url: String?, title: String?,
+                      text: String?, files: List<SharedFile>): String = buildString {
+        appendLine()
+        appendLine(shareAdditionHeading(at, source))
+        appendLine()
+        when (kind) {
+            "link" -> {
+                appendLine(if (title != null && url != null) "[${title.replace("[", "(").replace("]", ")")}]($url)" else "<$url>")
+                text?.let { appendLine(); it.lines().forEach { l -> appendLine("> $l") } }
+            }
+            "text" -> appendLine(text.orEmpty())
+            else -> {
+                text?.let { appendLine(it); appendLine() }
+                for (f in files) {
+                    val inline = f.mime == "application/pdf" || f.mime?.startsWith("image/") == true
+                    appendLine(if (inline) "![[${f.vaultName}]]" else "[[${f.vaultName}]]")
+                }
+            }
+        }
+    }
+
+    fun shareAdditionHeading(at: OffsetDateTime, source: Source?): String =
+        "**Added ${at.format(TIME)}${source?.name?.let { " · shared from $it" } ?: ""}**"
 
     private fun formatDuration(sec: Double): String {
         val s = sec.toLong()

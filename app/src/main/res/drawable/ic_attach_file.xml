@@ -1,0 +1,7 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <!-- A page with a folded corner and a small music note: the "Files & audio" tile. -->
+    <path android:strokeColor="#FF000000" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M14,3H6a1,1 0,0 0,-1 1v16a1,1 0,0 0,1 1h12a1,1 0,0 0,1 -1V8zM14,3v5h5M11.5,17.5v-6l3.5,-1M8.5,17.5a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0" />
+</vector>
