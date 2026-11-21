@@ -1,6 +1,6 @@
 # End-to-end tests (full run on a real phone)
 
-For any session, coding agent or person. A full run checks every feature in [FEATURES.md](FEATURES.md) along every path in [FLOWS.md](FLOWS.md), on the phone, from tap to the finished note in the vault. Each test names the flow (F01–F28) and the FEATURES section it covers; the coverage table at the end shows nothing is left out.
+For any session, coding agent or person. A full run checks every feature in [FEATURES.md](FEATURES.md) along every path in [FLOWS.md](FLOWS.md), on the phone, from tap to the finished note in the vault. Each test names the flow (F01–F34) and the FEATURES section it covers; the coverage table at the end shows nothing is left out.
 
 Rule: a change that adds or changes a feature or flow adds or updates its test here in the same change.
 
@@ -144,6 +144,11 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | T08-5 | F11 | Talk launcher icon: tap, talk, tap again. | First tap records with the default type; second tap stops and opens the note. |
 | T08-6 | F11 | Quick settings tile: tap (also on the lock screen), tap again. | Unlocks, records; subtitle "Recording · tap to save"; second tap saves. |
 | T08-7 | F11 | App-icon long-press menu; pinned one-tap icons. | First 3 types + Photo; pinned icon follows renames; deleted type → "This capture type was deleted". |
+| T08-8 | F29 | From the phone's home screen try every Brain entry: app icon, Talk, 4×3 widget buttons, 1×1 type and Photo buttons, pinned type and Photo icons. | Each opens what F29 says: Home, recording with the right type (default for Talk), or camera then the share panel. |
+| T08-9 | F32 | Place a new Brain widget; on the setup screen switch Task off and Photo on; Done. Then Back without changes on Edit widget. | Widget shows the new buttons; Back keeps the widget unchanged. |
+| T08-10 | F33 | Place a "Brain button" 1×1 widget, pick Private; place another, pick Photo. Rename the Private type in Settings; remove one widget. | Private button grey, Photo with camera icon; rename shows on the button; a removed widget's choice is forgotten (placing again asks). |
+| T08-11 | F30 | Add the Brain tile (edit tiles). Lock the phone, tap the tile; unlock; talk; tap the tile again. Pause from the note screen and look at the tile. | Asks to unlock, then records with the default type; subtitle "Recording · tap to save" / "Paused · tap to save"; second tap saves. |
+| T08-12 | F34 | Pin a type icon (type editor) and the Photo icon (Capture types); delete that type. | Android's add dialog; icons work; after deleting the type its icon is disabled with "This capture type was deleted". |
 
 ## 9. Settings
 
@@ -195,7 +200,7 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | 5 Photo and Attach | T05-1…8 |
 | 6 Note cards | T06-1…5, T06-8 |
 | 7 Capture types | T06-6, T09-2…4, T07-4 |
-| 8 Widgets and shortcuts | T08-1…7, T05-15 |
+| 8 Widgets and shortcuts | T08-1…12, T05-15 |
 | 9 Share | T05-9…14 |
 | 10 AI cleanup | T07-1…7, T04-7, T04-8, T06-6 |
 | 11 Transcription | T03-2, T03-10, T03-11, T09-6, T01-2 |
@@ -219,6 +224,12 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | F09 Save to | T05-9, T05-10, T05-13, T05-14 |
 | F10 Saved + voice comment | T05-9, T05-11 |
 | F11 Widget, icons, tile | T08-1, T08-2, T08-4…7, T05-15 |
+| F29 Phone home screen | T08-8 |
+| F30 Quick settings tile | T08-6, T08-11 |
+| F31 App-icon menu | T08-7 |
+| F32 Widget setup | T08-3, T08-9 |
+| F33 One-tap button | T08-4, T08-10 |
+| F34 Pin a one-tap icon | T08-7, T08-12 |
 | F12 First run | T01-1, T01-2 |
 | F13 Discard | T03-4, T03-5 |
 | F14 Clean again | T06-6 |

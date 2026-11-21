@@ -2,7 +2,7 @@
 
 For coding agents. Read this before rebuilding, redesigning or replacing any screen or module of the Brain app (playground build: Brain Play).
 
-How these features connect, step by step: [FLOWS.md](FLOWS.md). How to test all of it end to end on the phone: [E2E-TESTS.md](E2E-TESTS.md).
+How these features connect, step by step: [FLOWS.md](FLOWS.md). How to test all of it end to end on the phone: [E2E-TESTS.md](E2E-TESTS.md). How it is built (rebuild handover): [SPEC.md](SPEC.md).
 
 ## Rule
 

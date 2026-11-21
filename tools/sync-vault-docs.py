@@ -190,7 +190,7 @@ def main():
         changed.append("FLOWS.md")
 
     # Extra docs copied as they are (with the note under the title).
-    for extra in ("E2E-TESTS.md",):
+    for extra in ("E2E-TESTS.md", "SPEC.md"):
         p = os.path.join(repo, extra)
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
@@ -209,7 +209,7 @@ def main():
     spec = importlib.util.spec_from_file_location("wireframes", os.path.join(repo, "tools", "wireframes.py"))
     wireframes = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(wireframes)
-    if write_if_changed(os.path.join(VAULT_DIR, WIREFRAME_NAME), wireframes.build(note).encode("utf-8")):
+    if write_if_changed(os.path.join(VAULT_DIR, WIREFRAME_NAME), wireframes.build(note, os.path.relpath(VAULT_DIR, VAULT_ROOT).replace(os.sep, "/")).encode("utf-8")):
         changed.append(WIREFRAME_NAME)
 
     print("sync-vault-docs: " + (", ".join(changed) if changed else "vault copy already up to date"))
