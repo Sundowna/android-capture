@@ -110,9 +110,23 @@ If the transcript holds nothing to list, write only the title line. Never make u
         val r = check(answer, segments.size, mixed)
         if (r !is Result.Ok) return r
         val said = segments.flatMap(::words).map(::stem).toSet()
-        val kept = r.bullets.filter { grounded(it.text, said) >= MIN_GROUNDED }
+        val kept = r.bullets.filter { grounded(it.text, said) >= MIN_GROUNDED }.map { it.copy(text = dropUnsaidShould(it.text, said)) }
         if (kept.isEmpty()) return Result.Rejected("no line matches what was said", retry = false)
         return Result.Ok(kept, r.title?.takeIf { grounded(it, said) >= MIN_GROUNDED })
+    }
+
+    private val SHOULD = Regex("""\s*[;,—–-]?\s*\bshould\b(.*)$""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Fix lines end in "; should <what it should do instead>", and the model fills that in even when
+     * the speaker only described the problem ("why is scrolling so slow?" got "; should be faster").
+     * When most of that part's words were not said, the part goes and the problem stays.
+     */
+    fun dropUnsaidShould(text: String, said: Set<String>): String {
+        if (!TODO_LINE.containsMatchIn(text)) return text
+        val m = SHOULD.find(text) ?: return text
+        if (m.range.first < text.indexOf(':')) return text
+        return if (grounded(m.groupValues[1], said) >= MIN_GROUNDED) text else text.substring(0, m.range.first).trimEnd(' ', ';', ',', '—', '–', '-')
     }
 
     private val BULLET = Regex("""^\s*(?:[-*•]|\d+[.)])\s+(.*)$""")

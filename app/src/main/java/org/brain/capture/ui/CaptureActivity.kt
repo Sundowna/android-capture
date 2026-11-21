@@ -652,6 +652,8 @@ private fun Section(
     typing: Boolean, revealed: MutableMap<String, Int>, onTyped: (String) -> Unit, onEdit: (() -> Unit)? = null,
 ) {
     val transcript = c.transcript
+    // Tap the words to edit them, like the clean version: typed text and exact words too.
+    val tap = if (onEdit != null) Modifier.fillMaxWidth().clickable(onClickLabel = "Edit", onClick = onEdit) else Modifier
     when {
         recordingThis -> Hint(if (paused) "Paused" else "Listening…",
             if (view == View.Clean) "Talk freely. The clean version appears when you stop." else "Your exact words appear the moment you stop.")
@@ -659,13 +661,13 @@ private fun Section(
         c.kind == "file" -> SharedFiles(c)
         // Typed text without AI is shown as typed; with AI it is shown like a voice section (exact words / clean).
         c.kind == "text" && c.clean == null && c.cleanup == TextCapture.AI_PENDING ->
-            if (view == View.Raw) Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody) else Cleaning(cleaning)
+            if (view == View.Raw) Text(transcript.orEmpty(), tap, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody) else Cleaning(cleaning)
         c.kind != "voice" && (c.kind != "text" || c.clean == null) ->
-            Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
+            Text(transcript.orEmpty(), tap, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
         view == View.Raw -> {
             val words = transcript ?: live
             if (words.isNullOrBlank()) Hint("Transcribing…", "Whisper is writing down your words, on this phone.")
-            else TypeText(words, c.id, animate = typing, final = transcript != null, revealed = revealed, onDone = onTyped)
+            else Box(if (transcript != null) tap else Modifier) { TypeText(words, c.id, animate = typing, final = transcript != null, revealed = revealed, onDone = onTyped) }
         }
         // Cleaning, then the clean version: one cross-fade from the pulsing placeholder to the bullets.
         c.clean != null || (!transcript.isNullOrBlank() && c.cleanup == null && gemmaInstalled) ->
@@ -677,7 +679,7 @@ private fun Section(
         transcript == null -> Hint("Transcribing…", "The clean version follows as soon as Whisper is done.")
         transcript.isBlank() -> Hint("No speech recognised", "The recording is kept with the note.")
         c.cleanup != null || !gemmaInstalled -> {
-            Text(transcript, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
+            Text(transcript, tap, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
             Text(when {
                 c.cleanup?.startsWith(CleanupStep.NO_CLEANUP) == true -> "Exact words, as you chose: this type has no AI cleanup."
                 gemmaInstalled -> "Kept your exact words: the clean version didn't pass the check."
@@ -983,7 +985,8 @@ private fun EditCard(sections: List<Capture>, clean: Boolean, focusId: String?, 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(when {
                 clean -> "Lines with \"- \" are bullets; your exact words stay as they are."
-                Profiles.get(ctx, sections.firstOrNull()?.type).noCleanup -> "Your corrected words are saved as they are (no AI cleanup)."
+                Profiles.get(ctx, sections.firstOrNull()?.type).noCleanup ||
+                    sections.none { it.kind == "voice" || it.clean != null || it.cleanup == TextCapture.AI_PENDING } -> "Your corrected words are saved as they are (no AI cleanup)."
                 else -> "The clean version is made again from your corrected words."
             },
                 fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f).padding(end = 8.dp))

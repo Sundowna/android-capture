@@ -128,6 +128,16 @@ class CleanupTextTest {
         ), r.bullets)
     }
 
+    @Test fun dropsAShouldPartThatWasNotSaid() {
+        val segs = listOf("Why is the scrolling on the home screen so slow compared to other apps?", "Do you need to do a cleanup maybe?")
+        val r = CleanupText.check("- Fix: home screen — scrolling is so slow compared to other apps; should be faster [1]\n" +
+            "- Question: Do you need to do a cleanup maybe? [2]", segs) as Result.Ok
+        assertEquals("Fix: home screen — scrolling is so slow compared to other apps", r.bullets[0].text)
+        val said = listOf("Tapping the chevron takes you to the phone's home screen, it should take you to the app's home screen.")
+        val k = CleanupText.check("- Fix: chevron — goes to the phone's home screen; should go to the app's home screen [1]", said) as Result.Ok
+        assertEquals("Fix: chevron — goes to the phone's home screen; should go to the app's home screen", k.bullets.single().text)
+    }
+
     @Test fun mergesSeveralSourceGroups() {
         val r = CleanupText.check("- Pack the charger [3] [4]", 4) as Result.Ok
         assertEquals(Bullet("Pack the charger", listOf(3, 4)), r.bullets.single())
