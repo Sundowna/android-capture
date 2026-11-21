@@ -168,6 +168,7 @@ private fun App(retryRequest: MutableState<Boolean>, homeRequest: androidx.compo
     }
 }
 
+@android.annotation.SuppressLint("ModifierParameter") // the shared big button's modifier, not the screen's
 @Composable
 private fun HomeScreen(
     retryRequest: MutableState<Boolean>, recording: RecordingInfo?, buttonModifier: Modifier,
