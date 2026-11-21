@@ -20,7 +20,7 @@ object TextCapture {
      */
     suspend fun save(ctx: Context, text: String, type: String, ai: Boolean = false): Capture = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
-        if (type == CaptureTypes.PRIVATE) {
+        if (org.brain.capture.types.Profiles.isPrivateId(type)) { // the built-in Private and every private type made in Settings
             val now = System.currentTimeMillis()
             return@withContext Capture(id = UUID.randomUUID().toString(), createdAt = now, state = CaptureStates.SAVED,
                 kind = "text", transcript = text, type = type, cleanup = if (ai) AI_PENDING else TYPED).also {

@@ -251,6 +251,12 @@ private fun HomeScreen(
 
     // The hero (big button + time) folds into the small bar at the top as the list scrolls.
     val list = rememberLazyListState()
+    // Compose's default fling stops sooner than other Android lists; carry it further.
+    val baseFling = androidx.compose.foundation.gestures.ScrollableDefaults.flingBehavior()
+    val fling = remember(baseFling) { object : androidx.compose.foundation.gestures.FlingBehavior {
+        override suspend fun androidx.compose.foundation.gestures.ScrollScope.performFling(initialVelocity: Float): Float =
+            with(baseFling) { performFling(initialVelocity * FLING_BOOST) } / FLING_BOOST
+    } }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val heroPx = with(density) { 220.dp.toPx() }
     val collapse by remember { derivedStateOf {
@@ -262,7 +268,7 @@ private fun HomeScreen(
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize().safeDrawingPadding(), state = list,
+            Modifier.fillMaxSize().safeDrawingPadding(), state = list, flingBehavior = fling,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -488,3 +494,6 @@ internal class OpenInDownloads : ActivityResultContracts.OpenDocument() {
             android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download"),
         )
 }
+
+/** How much further a fling carries the home list than Compose's default. */
+private const val FLING_BOOST = 1.6f
