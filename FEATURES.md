@@ -2,6 +2,8 @@
 
 For coding agents. Read this before rebuilding, redesigning or replacing any screen or module of the Brain app (playground build: Brain Play).
 
+How these features connect, step by step: [FLOWS.md](FLOWS.md).
+
 ## Rule
 
 1. Before the change: mark which items below the change touches. Re-read their code; this list can lag.
