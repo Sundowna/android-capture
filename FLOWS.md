@@ -2,7 +2,7 @@
 
 For any session or coding agent. Every user path through the app, step by step: where it starts, what each step shows, and where it ends. Read it with [FEATURES.md](FEATURES.md), which lists every single feature; this file shows how they connect.
 
-The same flows are drawn as screens on the design canvas "Brain Camera button" (claude.ai design artifact): the artboard named in each heading, for example `F03`. Rows on the canvas: in-app capture (F01–F07), photo and outside the app (F08–F11), other in-app flows (F12–F18), settings (F19–F26), share and background (F27–F28). F29–F34 (phone home screen, tile, icon menu, widget setup, pinning) are drawn only on the Obsidian wireframe canvas.
+The same flows are drawn as screens on the design canvas "Brain Camera button" (claude.ai design artifact): the artboard named in each heading, for example `F03`. Rows on the canvas: in-app capture (F01–F07), photo and outside the app (F08–F11), other in-app flows (F12–F18), settings (F19–F26), share and background (F27–F28), outside the app (F29–F34: phone home screen, tile, icon menu, widget setup, pinning).
 
 Each screen is also saved as a picture in `docs/screens/` (`F03-Recording.png` …). End-to-end tests for every flow: [E2E-TESTS.md](E2E-TESTS.md).
 
