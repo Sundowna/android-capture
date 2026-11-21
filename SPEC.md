@@ -9,7 +9,7 @@ For an agent or developer who must rebuild this app exactly as it is and prove i
 | SPEC.md (this file) | **How it is built**: stack, manifest, data, storage, vault formats, pipelines, AI prompts, UI, widgets |
 | [E2E-TESTS.md](E2E-TESTS.md) | **How to prove it**: the full test run on a real phone, with coverage tables |
 | Obsidian canvas "Brain Capture Wireframes" | **What it looks like**: every screen drawn with canvas cards, arrows from each control to the screen it opens, a spec card under each screen |
-| Design canvas "Brain Camera button" (claude.ai artifact) and `docs/screens/F01–F28.png` | Pixel mockups of the screens |
+| Design canvas "Brain Camera button" (claude.ai artifact) and `docs/screens/F01–F34.png` | Pixel mockups of the screens |
 
 ## How to rebuild with these documents
 
