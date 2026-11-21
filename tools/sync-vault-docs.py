@@ -37,6 +37,7 @@ def write_if_changed(path, data):
 
 VAULT_ROOT = r"D:\BrainTest\SecondBrain\Open\Brain"
 CANVAS_NAME = "Brain Capture Flows.canvas"
+WIREFRAME_NAME = "Brain Capture Wireframes.canvas"
 IMG_W, IMG_H, TXT_W, GAP, ROW_GAP = 300, 650, 420, 20, 260
 
 
@@ -203,7 +204,15 @@ def main():
     if write_if_changed(os.path.join(VAULT_DIR, CANVAS_NAME), canvas.encode("utf-8")):
         changed.append(CANVAS_NAME)
 
-    print("sync-vault-docs: " +(", ".join(changed) if changed else "vault copy already up to date"))
+    # Wireframe canvas: screens drawn with canvas cards, arrows from the tapped control (tools/wireframes.py).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("wireframes", os.path.join(repo, "tools", "wireframes.py"))
+    wireframes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wireframes)
+    if write_if_changed(os.path.join(VAULT_DIR, WIREFRAME_NAME), wireframes.build(note).encode("utf-8")):
+        changed.append(WIREFRAME_NAME)
+
+    print("sync-vault-docs: " + (", ".join(changed) if changed else "vault copy already up to date"))
     return 0
 
 
