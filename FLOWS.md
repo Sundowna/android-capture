@@ -4,7 +4,11 @@ For any session or coding agent. Every user path through the app, step by step: 
 
 The same flows are drawn as screens on the design canvas "Brain Camera button" (claude.ai design artifact): the artboard named in each heading, for example `F03`. Rows on the canvas: in-app capture (F01–F07), photo and outside the app (F08–F11), other in-app flows (F12–F18), settings (F19–F26), share and background (F27–F28).
 
-Rule: a change that adds, removes or reorders a step updates this file and the matching artboard in the same change.
+Each screen is also saved as a picture in `docs/screens/` (`F03-Recording.png` …). End-to-end tests for every flow: [E2E-TESTS.md](E2E-TESTS.md).
+
+Rule: a change that adds, removes or reorders a step updates, in the same change, this file, the matching artboard, its picture in `docs/screens/` (render the artboard at 390×844) and its tests in E2E-TESTS.md.
+
+Vault copy: after every commit a Git hook copies FEATURES.md, FLOWS.md, E2E-TESTS.md and the screens into the owner's Obsidian vault (Android Voice App → Documentation) and rebuilds the Obsidian canvas "Brain Capture Flows" from this file. Never edit the vault copy; edit here. New computer: `sh tools/install-git-hooks.sh` once; by hand: `python tools/sync-vault-docs.py`.
 
 Words used: **Home** = the app's main screen. **Note screen** = the screen that shows one note (also used for recording, typing, pasting, editing). **Vault** = the Obsidian folder chosen in setup; new notes go to its inbox folder (`<inbox>/Voice`, `/Text`, `/Links`, `/Documents`, files in `/Attachments`).
 
