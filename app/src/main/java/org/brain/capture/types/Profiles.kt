@@ -31,6 +31,8 @@ data class CaptureProfile(
      * has not edited it, so an improved built-in text replaces it.
      */
     val base: String? = null,
+    /** No AI cleanup: the note keeps the exact words, and Gemma is not even loaded (fastest). */
+    val noCleanup: Boolean = false,
 ) {
     val builtIn: Boolean get() = id in Profiles.BUILT_IN
 }
@@ -165,6 +167,7 @@ $FEEDBACK_RULES"""
         CaptureProfile("c-fix", "Fix", "what's broken, where", "bug", FIX_INSTRUCTION, checklist = false, private = false, onWidget = false),
         CaptureProfile("c-feature", "Feature", "what to add or change", "sparkle", FEATURE_INSTRUCTION, checklist = false, private = false, onWidget = false),
         CaptureProfile("c-voicenote", "Voice note", "cleaned up, nothing left out", "mic", VOICE_NOTE_INSTRUCTION, checklist = false, private = false, onWidget = false, mixed = true),
+        CaptureProfile("c-exact", "Exact words", "no AI cleanup, fastest", "pen", IDEA_INSTRUCTION, checklist = false, private = false, onWidget = false, noCleanup = true),
     )
     private const val KEY_ADDED = "capture_profiles_added"
 
@@ -253,11 +256,22 @@ $FEEDBACK_RULES"""
     fun widgetOpenBrain(ctx: Context) = prefs(ctx).getBoolean(KEY_OPEN, true)
     fun setWidgetOpenBrain(ctx: Context, on: Boolean) { prefs(ctx).edit().putBoolean(KEY_OPEN, on).apply(); state.value = all(ctx).toList() }
 
-    /** What the widget shows, in order: types first, then Open Brain (null) if it is on. */
+    /**
+     * The Photo button (widget slot, 1x1 widget, app-icon shortcut): not a capture type. It opens
+     * the phone's camera and then the share panel. [PHOTO_SLOT] stands for it where a type would go.
+     */
+    const val PHOTO = "photo"
+    val PHOTO_SLOT = CaptureProfile(PHOTO, "Photo", "take a picture", "camera", "", checklist = false, private = false, onWidget = false)
+
+    fun widgetPhoto(ctx: Context) = prefs(ctx).getBoolean(KEY_PHOTO, false)
+    fun setWidgetPhoto(ctx: Context, on: Boolean) { prefs(ctx).edit().putBoolean(KEY_PHOTO, on).apply(); state.value = all(ctx).toList() }
+
+    /** What the widget shows, in order: types first, then Photo ([PHOTO_SLOT]) and Open Brain (null) if they are on. */
     fun widgetSlots(ctx: Context): List<CaptureProfile?> {
         val open = widgetOpenBrain(ctx)
-        val types = all(ctx).filter { it.onWidget }.take(if (open) WIDGET_SLOTS - 1 else WIDGET_SLOTS)
-        return types + if (open) listOf(null) else emptyList()
+        val photo = widgetPhoto(ctx)
+        val types = all(ctx).filter { it.onWidget }.take(WIDGET_SLOTS - (if (open) 1 else 0) - (if (photo) 1 else 0))
+        return types + (if (photo) listOf(PHOTO_SLOT) else emptyList()) + (if (open) listOf(null) else emptyList())
     }
 
     /**
@@ -276,11 +290,13 @@ $FEEDBACK_RULES"""
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private const val KEY = "capture_profiles"
     private const val KEY_OPEN = "widget_open_brain"
+    private const val KEY_PHOTO = "widget_photo"
     private const val KEY_DEFAULT = "default_type"
 
     private fun toJson(p: CaptureProfile) = JSONObject().put("id", p.id).put("name", p.name).put("subtitle", p.subtitle)
         .put("icon", p.icon).put("instruction", p.instruction).put("checklist", p.checklist)
         .put("private", p.private).put("onWidget", p.onWidget).put("mixed", p.mixed)
+        .put("noCleanup", p.noCleanup)
         .apply { p.base?.let { put("base", it) } }
 
     private fun parse(raw: String): List<CaptureProfile> {
@@ -289,7 +305,8 @@ $FEEDBACK_RULES"""
             CaptureProfile(o.getString("id"), o.optString("name"), o.optString("subtitle"), o.optString("icon", "star"),
                 o.optString("instruction", IDEA_INSTRUCTION), o.optBoolean("checklist"), o.optBoolean("private"), o.optBoolean("onWidget"),
                 o.optBoolean("mixed", default(o.getString("id"))?.mixed ?: false),
-                o.optString("base").ifEmpty { null })
+                o.optString("base").ifEmpty { null },
+                o.optBoolean("noCleanup", default(o.getString("id"))?.noCleanup ?: false))
         }
     }
 }

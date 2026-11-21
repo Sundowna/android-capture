@@ -243,4 +243,8 @@ class CleanupTextTest {
 
     @Test fun leavesEditedNoteAlone() =
         assertNull(CleanupText.rewrite(note.replace("call mum", "call Mum"), "Uh buy milk. And, uh, call mum.", "x", "m"))
+
+    // Correcting a recording that heard no speech: there are no old words to find (this used to loop for ever).
+    @Test(timeout = 2000) fun replaceEmptyWordsReturnsNull() =
+        assertNull(CleanupText.replaceWords(note, "", "buy milk"))
 }

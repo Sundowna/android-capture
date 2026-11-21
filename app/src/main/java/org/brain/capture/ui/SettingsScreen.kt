@@ -103,7 +103,8 @@ private fun Menu(open: (Page) -> Unit) {
         Page.Widget to types.filter { it.onWidget }.joinToString(", ") { it.name }.ifEmpty { "No buttons" },
         Page.Vault to listOfNotNull(prefs.vaultUri?.lastPathSegment?.substringAfter(':')?.substringAfterLast('/') ?: "Not selected", prefs.inboxFolder).joinToString(" · "),
         Page.Transcription to (if (ModelStore(ctx).isInstalled()) "Whisper small" else "Model not installed") + " · " + language,
-        Page.Display to (if (prefs.audioFormat == "wav") "WAV" else "Opus") + " · ${prefs.cardCount} notes shown",
+        Page.Display to (if (prefs.audioFormat == "wav") "WAV" else "Opus") + " · ${prefs.cardCount} notes shown" +
+            (if (prefs.shareAudio) "" else " · share without recording"),
         Page.Storage to (storage?.let { android.text.format.Formatter.formatShortFileSize(ctx, it) + " on this phone" } ?: "…"),
         Page.About to "No internet, no accounts",
     )
@@ -152,6 +153,9 @@ private fun PageContent(p: Page) {
             Text("Notes on the home screen", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             Choice(listOf(5 to "5", 10 to "10", 20 to "20"), prefs.cardCount) { prefs.cardCount = it }
             Hint("How many show before “Show more”.")
+            Text("Sharing a note", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Choice(listOf(true to "With voice recording", false to "Without"), prefs.shareAudio) { prefs.shareAudio = it }
+            Hint("What the share button on a card sends: the note's text and photos always, the voice recording only if you choose “With”.")
         }
         Page.Storage -> {
             var usage by remember { mutableStateOf<Housekeeping.Usage?>(null) }

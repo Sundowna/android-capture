@@ -223,8 +223,10 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val recordingHere = recording != null && (recording?.captureId == noteId || recording?.appendTo == noteId)
     val gemmaInstalled = remember { GemmaHolder.modelFile(ctx) != null }
     // Still being transcribed or cleaned: the note is not finished yet.
+    // Typed text saved "with AI" counts too while it waits for its clean version.
     val noteBusy = sections.any { it.kind == "voice" &&
-        (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && it.transcript.isNotBlank())) }
+        (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && it.transcript.isNotBlank())) ||
+        it.kind == "text" && it.clean == null && it.cleanup == TextCapture.AI_PENDING }
     // Adding to the note on screen: only once it is saved, and not to private notes (they never touch the vault).
     val canAdd = note?.state == CaptureStates.SAVED && note?.isPrivate == false && !undone
     // Editing the note on screen: once it is finished, and not while recording, transcribing or cleaning.
@@ -239,6 +241,9 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         editClean = view == View.Clean && sections.any { it.clean != null }
         mode = CaptureActivity.MODE_EDIT
     }
+    // Asked for from a card (long-press on its text): edit as soon as the note is there.
+    var editWanted by remember { mutableStateOf(false) }
+    LaunchedEffect(editWanted, canEdit) { if (editWanted && canEdit) { editWanted = false; startEdit(null) } }
     // Back leaves Type, Paste or editing first, back to the note; only then the screen itself.
     androidx.activity.compose.BackHandler(enabled = mode != CaptureActivity.MODE_VOICE) { mode = CaptureActivity.MODE_VOICE }
 
@@ -267,7 +272,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     // A widget, tile or app request: switch to it, and start talking if asked.
     LaunchedEffect(request?.at) {
         val r = request ?: return@LaunchedEffect
-        mode = r.mode
+        // Edit (a long-press on a card) waits until the note is loaded and editable; see below.
+        if (r.mode == CaptureActivity.MODE_EDIT) { mode = CaptureActivity.MODE_VOICE; editWanted = true } else mode = r.mode
         if (Profiles.isPrivateId(r.type)) { private = true; privateKind = r.type } else { kind = r.type; private = false }
         if (r.noteId != null) noteId = r.noteId else if (r.start && recording == null) newNote()
         if (r.start && r.mode == CaptureActivity.MODE_VOICE && recording == null)
@@ -288,6 +294,39 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val watched = remember { mutableStateListOf<String>() }
     val revealed = remember { mutableStateMapOf<String, Int>() }
     var typedDone by remember { mutableStateOf<String?>(null) }
+
+    // Photo button: the phone's camera app; the photo becomes a new note or is added to this one.
+    var photoSaving by remember { mutableStateOf(false) }
+    var photoTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    val takePhoto = rememberTakePhoto(
+        onSaving = { photoSaving = true },
+        onDone = { id, message ->
+            photoSaving = false
+            if (id != null) {
+                noteId = photoTarget ?: id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
+                if (id !in watched) watched += id // made here: Undo can take it back
+            } else if (message != null) android.widget.Toast.makeText(ctx, message, android.widget.Toast.LENGTH_LONG).show()
+            photoTarget = null
+        })
+    fun photo() {
+        photoTarget = note?.takeIf { canAdd }?.id
+        takePhoto(photoTarget)
+    }
+    // Attach (paperclip): the same, from Gallery, Files, Contacts, a link or where you are.
+    var attachOpen by rememberSaveable { mutableStateOf(false) }
+    var attachTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    AttachSheet(attachOpen, attachTarget, onDismiss = { attachOpen = false }, onSaving = { photoSaving = true },
+        onDone = { id, message ->
+            photoSaving = false
+            if (id != null) {
+                noteId = attachTarget ?: id; undone = false; mode = CaptureActivity.MODE_VOICE; userPickedView = false
+                if (id !in watched) watched += id
+            } else if (message != null) android.widget.Toast.makeText(ctx, message, android.widget.Toast.LENGTH_LONG).show()
+        })
+    fun attach() {
+        attachTarget = note?.takeIf { canAdd }?.id
+        attachOpen = true
+    }
     LaunchedEffect(sections, recording?.captureId) {
         recording?.captureId?.let { if (it !in watched) watched += it }
         sections.forEach { if (it.kind == "voice" && it.transcript == null && it.id !in watched) watched += it.id }
@@ -297,8 +336,10 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     LaunchedEffect(last?.id, last?.clean != null, typedDone, recordingHere) {
         if (userPickedView) return@LaunchedEffect
         val l = last
+        // A type without AI cleanup stays on the exact words: there is no clean version coming.
+        val noAi = Profiles.get(ctx, note?.type ?: l?.type).noCleanup
         when {
-            l == null || recordingHere -> view = View.Raw
+            l == null || recordingHere || noAi -> view = View.Raw
             l.id in watched -> if (typedDone == l.id && !l.transcript.isNullOrBlank()) { delay(1000); view = View.Clean } else view = View.Raw
             else -> view = if (l.clean != null) View.Clean else View.Raw
         }
@@ -327,11 +368,31 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                 }, onClose = onClose)
 
             // A typed or pasted note has no audio and no clean version: no voice tabs for it.
-            val typedNote = note != null && note?.kind != "voice" && additions.none { it.kind == "voice" } && !recordingHere && !undone
+            // A photo note looks like a voice note: the same tabs and type drop-down, so words added to it are cleaned the same way.
+            val photoNote = Photos.isPhoto(note)
+            // (Typed text saved with AI gets the voice tabs too, so its clean version can be seen.)
+            val aiText = sections.any { it.kind == "text" && (it.clean != null || it.cleanup == TextCapture.AI_PENDING) }
+            val typedNote = note != null && note?.kind != "voice" && !photoNote && !aiText && additions.none { it.kind == "voice" } && !recordingHere && !undone
+            // Every opened note shows its capture type at the top right, like on Home's widget and cards.
+            // A finished note: pick a type (or the same one) and it is cleaned again with that instruction;
+            // types without AI cleanup aren't offered for that (except the note's own, so the chip names it).
+            @Composable
+            fun NoteTypeChip(n: Capture) {
+                val canPick = n.state == CaptureStates.SAVED && recording == null && !noteBusy && gemmaInstalled
+                TypeChip(n.type, profiles.orEmpty().filter { it.private == n.isPrivate && (!it.noCleanup || it.id == n.type) },
+                    again = true, enabled = canPick) { t ->
+                    if (n.isPrivate) privateKind = t else kind = t
+                    userPickedView = true; view = View.Clean
+                    org.brain.capture.share.AppScope.launch { CleanupStep.reclean(ctx, n.id, t) }
+                }
+            }
             if (mode == CaptureActivity.MODE_VOICE && typedNote) {
-                Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(when (note?.kind) { "link" -> "Saved link"; "file" -> "Shared file"; else -> "Typed note" }, fontFamily = Grotesk,
-                        fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text)
+                Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(when {
+                        Photos.isPhoto(note) -> "Photo"
+                        note?.kind == "link" -> "Saved link"; note?.kind == "file" -> "Shared file"; else -> "Typed note" }, fontFamily = Grotesk,
+                        fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text, modifier = Modifier.weight(1f))
+                    note?.let { NoteTypeChip(it) }
                 }
             } else if (mode == CaptureActivity.MODE_VOICE) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -342,14 +403,7 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     val n = note
                     if (zoneTypes.size > 1 && (n == null || recordingHere && recording?.appendTo == null))
                         TypeChip(type, zoneTypes) { if (private) privateKind = it else kind = it }
-                    else if (n != null && n.kind == "voice" && n.state == CaptureStates.SAVED && recording == null &&
-                        !noteBusy && !undone && gemmaInstalled && !n.transcript.isNullOrBlank())
-                        // Finished note: pick a type (or the same one) and it is cleaned again with that instruction.
-                        TypeChip(n.type, profiles.orEmpty().filter { it.private == n.isPrivate }, again = true) { t ->
-                            if (n.isPrivate) privateKind = t else kind = t
-                            userPickedView = true; view = View.Clean
-                            org.brain.capture.share.AppScope.launch { CleanupStep.reclean(ctx, n.id, t) }
-                        }
+                    else if (n != null && !undone) NoteTypeChip(n)
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,12 +508,18 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             }
 
             // Type and Paste add to the note on screen; with no finished note open they start a new one.
-            if (mode != CaptureActivity.MODE_EDIT) ModeRow(mode, enabled = recording == null, canEdit = canEdit) { m ->
-                when {
-                    m == mode -> {}
-                    m == CaptureActivity.MODE_EDIT -> startEdit(null)
-                    else -> { mode = m; if (m != CaptureActivity.MODE_VOICE && note?.state != CaptureStates.SAVED) newNote() }
+            // One bottom row on every note screen: Paste · Photo · Attach. Talking is the big mic, editing is
+            // tapping the note's text. Photo and Attach add to the note on screen (never to private notes).
+            val canAttach = recording == null && !private && !photoSaving
+            if (mode != CaptureActivity.MODE_EDIT) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BarButton("Paste", R.drawable.ic_paste, selected = mode == CaptureActivity.MODE_PASTE, enabled = recording == null,
+                    modifier = Modifier.weight(1f)) {
+                    // Tapping Paste again goes back to the note.
+                    if (mode == CaptureActivity.MODE_PASTE) mode = CaptureActivity.MODE_VOICE
+                    else { mode = CaptureActivity.MODE_PASTE; if (note?.state != CaptureStates.SAVED) newNote() }
                 }
+                BarButton("Photo", R.drawable.t_camera, enabled = canAttach, modifier = Modifier.weight(1f)) { photo() }
+                BarButton("Attach", R.drawable.ic_attach, enabled = canAttach, modifier = Modifier.weight(1f)) { attach() }
             }
         }
     }
@@ -508,11 +568,13 @@ private fun ViewTab(label: String, sub: String, on: Boolean, onClick: () -> Unit
 
 /** The capture type for this note; a tap opens the list (Settings → Capture types edits them). */
 @Composable
-private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, again: Boolean = false, onPick: (String) -> Unit) {
+private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, again: Boolean = false,
+                     enabled: Boolean = true, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val current = types.firstOrNull { it.id == selected } ?: types.first()
-    Box {
-        Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable { open = true }
+    // Always shows the note's type; while the note is still being worked on it can't be changed yet (dimmed).
+    Box(Modifier.graphicsLayer { alpha = if (enabled) 1f else 0.5f }) {
+        Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = enabled) { open = true }
             .semantics { contentDescription = "Capture type ${current.name}, tap to change" }
             .heightIn(min = 44.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -595,7 +657,11 @@ private fun Section(
             if (view == View.Clean) "Talk freely. The clean version appears when you stop." else "Your exact words appear the moment you stop.")
         // Shared files: their thumbnails (tap one to open it), then any caption.
         c.kind == "file" -> SharedFiles(c)
-        c.kind != "voice" -> Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
+        // Typed text without AI is shown as typed; with AI it is shown like a voice section (exact words / clean).
+        c.kind == "text" && c.clean == null && c.cleanup == TextCapture.AI_PENDING ->
+            if (view == View.Raw) Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody) else Cleaning(cleaning)
+        c.kind != "voice" && (c.kind != "text" || c.clean == null) ->
+            Text(transcript.orEmpty(), fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
         view == View.Raw -> {
             val words = transcript ?: live
             if (words.isNullOrBlank()) Hint("Transcribing…", "Whisper is writing down your words, on this phone.")
@@ -612,8 +678,11 @@ private fun Section(
         transcript.isBlank() -> Hint("No speech recognised", "The recording is kept with the note.")
         c.cleanup != null || !gemmaInstalled -> {
             Text(transcript, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
-            Text(if (gemmaInstalled) "Kept your exact words: the clean version didn't pass the check." else "No cleanup model on this phone yet.",
-                fontSize = 12.sp, color = Ink.TextDim)
+            Text(when {
+                c.cleanup?.startsWith(CleanupStep.NO_CLEANUP) == true -> "Exact words, as you chose: this type has no AI cleanup."
+                gemmaInstalled -> "Kept your exact words: the clean version didn't pass the check."
+                else -> "No cleanup model on this phone yet."
+            }, fontSize = 12.sp, color = Ink.TextDim)
         }
         else -> Cleaning(cleaning)
     }
@@ -851,22 +920,20 @@ fun BigButton(recording: Boolean, paused: Boolean, level: () -> Float, size: Dp,
     }
 }
 
+/**
+ * One button of the bottom row (Home and every note screen): an icon above its word, 52 dp tall.
+ * [selected] (the screen you are on, e.g. Paste) is lighter; disabled ones are greyed out.
+ */
 @Composable
-private fun ModeRow(mode: String, enabled: Boolean, canEdit: Boolean = false, onMode: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        // A finished note on screen: Edit changes its text; Type, Voice and Paste add to it.
-        (listOfNotNull(if (canEdit) CaptureActivity.MODE_EDIT to "Edit" else null) +
-            listOf(CaptureActivity.MODE_TYPE to "Type", CaptureActivity.MODE_VOICE to "Voice", CaptureActivity.MODE_PASTE to "Paste")).forEach { (m, label) ->
-            val on = m == mode
-            val usable = enabled || m == CaptureActivity.MODE_VOICE
-            Surface(onClick = { if (usable) onMode(m) },
-                shape = RoundedCornerShape(12.dp), color = if (on) Ink.Raised else Ink.Panel,
-                modifier = Modifier.weight(1f).height(52.dp).semantics { selected = on; role = Role.Tab }) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(label, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (on) Ink.TextStrong else if (usable) Ink.TextSoft else Ink.Bar)
-                }
-            }
+internal fun BarButton(label: String, icon: Int, selected: Boolean = false, enabled: Boolean = true,
+                       modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val tint = when { !enabled -> Ink.Bar; selected -> Ink.TextStrong; else -> Ink.TextSoft }
+    Surface(onClick = { if (enabled) onClick() }, shape = RoundedCornerShape(12.dp), color = if (selected) Ink.Raised else Ink.Panel,
+        modifier = modifier.height(52.dp).semantics { this.selected = selected; role = Role.Button }) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(painterResource(icon), null, Modifier.size(18.dp), tint = tint)
+            Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = tint, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }
@@ -896,24 +963,29 @@ private fun EditCard(sections: List<Capture>, clean: Boolean, focusId: String?, 
     val changed = start.filter { (id, v) -> texts[id]?.text != v.first }
 
     Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Scrolls with the cursor as you type (Enter at the bottom moves the view down), with a fine indicator on the right.
+        val scroll = rememberScrollState()
+        Column(Modifier.weight(1f).thinScrollbar(scroll).verticalScroll(scroll).padding(end = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             sections.forEachIndexed { i, c ->
                 if (i > 0) Text("Added ${TIME.format(Date(c.createdAt))}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                     color = Ink.TextDim, modifier = Modifier.padding(top = 8.dp))
                 val v = texts[c.id]
                 if (v == null) Text(c.transcript.orEmpty().ifBlank { "(a shared file)" }, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextDim)
-                else BasicTextField(v, { texts[c.id] = it },
+                else CursorFollowingTextField(v, { texts[c.id] = it },
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Ink.Well).padding(12.dp)
                         .then(if (c.id == focusId) Modifier.focusRequester(focus) else Modifier),
                     enabled = !busy,
-                    textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody),
-                    cursorBrush = SolidColor(Ink.Amber))
+                    textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody))
             }
         }
         error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (clean) "Lines with \"- \" are bullets; your exact words stay as they are."
-                else "The clean version is made again from your corrected words.",
+            Text(when {
+                clean -> "Lines with \"- \" are bullets; your exact words stay as they are."
+                Profiles.get(ctx, sections.firstOrNull()?.type).noCleanup -> "Your corrected words are saved as they are (no AI cleanup)."
+                else -> "The clean version is made again from your corrected words."
+            },
                 fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f).padding(end = 8.dp))
             androidx.compose.material3.TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel", color = Ink.TextSoft) }
             PillButton(if (busy) "Saving…" else "Save", enabled = changed.isNotEmpty() && !busy) {
@@ -939,42 +1011,76 @@ private fun EditCard(sections: List<Capture>, clean: Boolean, focusId: String?, 
 private fun TextCard(mode: String, private: Boolean, typeId: String, appendTo: Capture? = null, onSaved: (Capture) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var text by rememberSaveable(mode) { mutableStateOf("") }
+    var field by rememberSaveable(mode, stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
+        mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
+    }
+    val text = field.text
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(mode) {
         if (mode == CaptureActivity.MODE_PASTE) {
             val clip = ctx.getSystemService(ClipboardManager::class.java).primaryClip
-            text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+            val pasted = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+            field = androidx.compose.ui.text.input.TextFieldValue(pasted, androidx.compose.ui.text.TextRange(pasted.length))
         } else runCatching { focus.requestFocus() }
     }
     // No extra keyboard padding here: the screen already makes room for the keyboard.
     Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (text.isEmpty()) Text(if (mode == CaptureActivity.MODE_PASTE) "The clipboard is empty." else "Type anything…",
-                fontSize = 15.sp, color = Ink.TextDim)
-            BasicTextField(text, { text = it }, Modifier.fillMaxSize().focusRequester(focus),
-                textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody),
-                cursorBrush = SolidColor(Ink.Amber))
+        // Scrolls with the cursor as you type, with a fine indicator on the right; the whole area stays tappable.
+        val scroll = rememberScrollState()
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val visible = maxHeight
+            Box(Modifier.fillMaxSize().thinScrollbar(scroll).verticalScroll(scroll).padding(end = 8.dp)) {
+                if (text.isEmpty()) Text(if (mode == CaptureActivity.MODE_PASTE) "The clipboard is empty." else "Type anything…",
+                    fontSize = 15.sp, color = Ink.TextDim)
+                CursorFollowingTextField(field, { field = it },
+                    Modifier.fillMaxWidth().heightIn(min = visible).focusRequester(focus),
+                    textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody))
+            }
         }
         error?.let { Text(it, fontSize = 12.sp, color = Ink.Error) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(when {
-                appendTo != null -> "Adds to this note"
-                private -> "Kept on this phone only"
-                else -> "Goes to your inbox as ${Profiles.get(ctx, typeId).name}"
-            },
-                fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.weight(1f))
-            PillButton(if (busy) "Saving…" else "Save", enabled = text.isNotBlank() && !busy) {
-                busy = true; error = null
-                scope.launch {
-                    runCatching { if (appendTo != null) TextCapture.append(ctx, appendTo, text.trim()) else TextCapture.save(ctx, text.trim(), typeId) }
-                        .onSuccess { text = ""; onSaved(it) }
-                        .onFailure { error = it.message ?: "Could not save" }
-                    busy = false
-                }
+        Text(when {
+            appendTo != null -> "Adds to this note"
+            private -> "Kept on this phone only"
+            else -> "Goes to your inbox as ${Profiles.get(ctx, appendTo?.type ?: typeId).name}"
+        }, fontSize = 12.sp, color = Ink.TextDim)
+        // Two ways to save: tidied by the AI with the note's type, or exactly as typed (fastest).
+        // Without the AI model on the phone there is only the plain save.
+        val aiAvailable = remember { GemmaHolder.modelFile(ctx) != null }
+        var savingAi by remember { mutableStateOf<Boolean?>(null) }
+        fun save(ai: Boolean) {
+            busy = true; error = null; savingAi = ai
+            scope.launch {
+                runCatching { if (appendTo != null) TextCapture.append(ctx, appendTo, text.trim(), ai) else TextCapture.save(ctx, text.trim(), typeId, ai) }
+                    .onSuccess { field = androidx.compose.ui.text.input.TextFieldValue(""); onSaved(it) }
+                    .onFailure { error = it.message ?: "Could not save" }
+                busy = false; savingAi = null
             }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // The plain save is the main one (filled); the AI save is the outlined one, with the robot head.
+            if (aiAvailable) SaveButton(if (savingAi == true) "Saving…" else "Save with AI", filled = false, robot = true,
+                enabled = text.isNotBlank() && !busy, modifier = Modifier.weight(1f)) { save(ai = true) }
+            SaveButton(if (savingAi == false) "Saving…" else if (aiAvailable) "Save, no AI" else "Save", filled = true, robot = false,
+                enabled = text.isNotBlank() && !busy, modifier = Modifier.weight(1f)) { save(ai = false) }
+        }
+    }
+}
+
+/** A save button with the save icon: amber filled (Save with AI) or amber outline (Save, no AI). */
+@Composable
+private fun SaveButton(label: String, filled: Boolean, robot: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val alpha = if (enabled) 1f else 0.4f
+    val fg = if (filled) Ink.OnAmber else Ink.Amber.copy(alpha = alpha)
+    Surface(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(999.dp),
+        color = if (filled) Ink.Amber.copy(alpha = alpha) else Color.Transparent,
+        border = if (filled) null else androidx.compose.foundation.BorderStroke(1.5.dp, Ink.Amber.copy(alpha = alpha)),
+        modifier = modifier.height(48.dp)) {
+        Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            // The robot head marks the AI save; the plain disk is the save without AI.
+            Icon(painterResource(if (robot) R.drawable.ic_robot else R.drawable.ic_save), null, Modifier.size(18.dp), tint = fg)
+            Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = fg, modifier = Modifier.padding(start = 8.dp))
         }
     }
 }

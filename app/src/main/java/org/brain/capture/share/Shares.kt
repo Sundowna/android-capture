@@ -44,8 +44,11 @@ object Shares {
     private fun dir(ctx: Context, id: String) = File(ctx.filesDir, "shares/$id")
     private fun metaFile(dir: File) = File(dir, "meta.json")
 
-    /** Copies everything out of the share intent. [progress] gets 0..1 when sizes are known, else null. */
-    suspend fun stage(ctx: Context, intent: Intent, sourceApp: String?, progress: (Float?) -> Unit): Capture =
+    /**
+     * Copies everything out of the share intent. [progress] gets 0..1 when sizes are known, else null.
+     * [sourceName] replaces the app name looked up from [sourceApp] (the Photo button says "Camera").
+     */
+    suspend fun stage(ctx: Context, intent: Intent, sourceApp: String?, sourceName: String? = null, progress: (Float?) -> Unit): Capture =
         withContext(Dispatchers.IO) {
             val cr = ctx.contentResolver
             val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
@@ -55,7 +58,7 @@ object Shares {
             val id = UUID.randomUUID().toString()
             val d = dir(ctx, id).apply { mkdirs() }
             val meta = JSONObject().put("sourceApp", sourceApp ?: "")
-                .put("sourceName", Previews.appName(ctx, sourceApp) ?: "")
+                .put("sourceName", sourceName ?: Previews.appName(ctx, sourceApp) ?: "")
             val files = JSONArray()
             var fingerprint: String? = null
             val kind: String
@@ -220,8 +223,10 @@ object Shares {
             else -> {
                 val files = meta.getJSONArray("files")
                 val list = (0 until files.length()).map { files.getJSONObject(it) }
-                val kind = ShareParse.fileKind(list.map { it.optString("mime") })
-                val label = list.firstOrNull()?.optString("name")?.substringBeforeLast('.')?.ifEmpty { null } ?: title
+                // Photo button: "2026-11-21 14.32.05 Photo", not the photo's own dated file name again.
+                val photo = meta.optString("sourceName") == org.brain.capture.ui.Photos.SOURCE
+                val kind = if (photo) "Photo" else ShareParse.fileKind(list.map { it.optString("mime") })
+                val label = if (photo) null else list.firstOrNull()?.optString("name")?.substringBeforeLast('.')?.ifEmpty { null } ?: title
                 NoteBuilder.baseName(at, kind, label) to NoteBuilder.fileNote(
                     c.id, at, list.map { NoteBuilder.SharedFile(it.getString("vaultName"), it.optString("mime"), it.optLong("size"), it.optString("sha256"), it.optInt("pages", -1)) },
                     text, source)

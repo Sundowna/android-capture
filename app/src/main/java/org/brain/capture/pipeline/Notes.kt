@@ -28,6 +28,7 @@ data class NoteView(val text: String, val fromVault: Boolean, val missing: Boole
  */
 object Notes {
     private const val TAG = "Notes"
+    private val AUDIO_EXTENSIONS = setOf("ogg", "opus", "wav", "m4a", "mp3", "aac", "flac", "webm", "3gp", "amr")
     private val cache = ConcurrentHashMap<String, NoteView>()
 
     fun cached(id: String): NoteView? = cache[id]
@@ -160,7 +161,10 @@ object Notes {
             val folder = path.substringBeforeLast('/', "")
             val inbox = Prefs(ctx).inboxFolder
             val names = Regex("""!\[\[([^\]|#]+)""").findAll(note).map { it.groupValues[1].trim() }.distinct()
+            // Settings → Display: voice recordings can be left out of what is shared.
+            val withAudio = Prefs(ctx).shareAudio
             for (name in names) {
+                if (!withAudio && name.substringAfterLast('.', "").lowercase() in AUDIO_EXTENSIONS) continue
                 val candidates = listOf("$folder/Attachments/$name", "$folder/$name", "$inbox/Attachments/$name", name)
                     .map { it.trimStart('/') }.distinct()
                 val uri = candidates.firstNotNullOfOrNull { runCatching { vault.uriOf(it) }.getOrNull() } ?: continue
@@ -184,6 +188,12 @@ object Notes {
      * Undo for an addition: its "Added 21:50:39" section comes out of the note (only if it is still
      * there as the app wrote it), its recording goes to the vault's .trash, and the app forgets it.
      */
+    /** Vault names of the files a share or photo saved (empty for voice and text). */
+    private fun sharedFiles(c: Capture): List<String> = runCatching {
+        val f = org.json.JSONObject(c.details ?: "{}").optJSONArray("files") ?: return@runCatching emptyList()
+        (0 until f.length()).mapNotNull { f.getJSONObject(it).optString("name").ifEmpty { null } }
+    }.getOrDefault(emptyList())
+
     suspend fun deleteAddition(ctx: Context, a: Capture) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
         val owner = a.appendTo?.let { dao.get(it) } ?: error("Note not found")
@@ -197,7 +207,8 @@ object Notes {
         dao.putEdit(PendingEdit(owner.id, path, note, updated))
         vault.overwrite(path, updated)
         dao.clearEdit(owner.id)
-        a.audioVaultName?.let { name ->
+        // Its audio, or the photos and files it added, go to .trash with it.
+        (listOfNotNull(a.audioVaultName) + sharedFiles(a)).distinct().forEach { name ->
             val folder = path.substringBeforeLast('/', "")
             listOf("$folder/Attachments/$name", "$folder/$name", "${Prefs(ctx).inboxFolder}/Attachments/$name")
                 .map { it.trimStart('/') }.distinct().any { runCatching { vault.trash(it) }.getOrDefault(false) }
@@ -235,11 +246,8 @@ object Notes {
         val moves = ArrayList<Pair<String, String>>() // (where it is in .trash, where it was)
         val own = buildList {
             c.audioVaultName?.let(::add)
-            dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add) }
-            runCatching {
-                val f = org.json.JSONObject(c.details ?: "{}").optJSONArray("files")
-                if (f != null) for (i in 0 until f.length()) f.getJSONObject(i).optString("name").takeIf { it.isNotEmpty() }?.let(::add)
-            }
+            addAll(sharedFiles(c))
+            dao.additions(c.id).forEach { a -> a.audioVaultName?.let(::add); addAll(sharedFiles(a)) }
         }.distinct()
         val folder = path?.substringBeforeLast('/', "") ?: c.notePath?.substringBeforeLast('/', "") ?: ""
         val inbox = Prefs(ctx).inboxFolder

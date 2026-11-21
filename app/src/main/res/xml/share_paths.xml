@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Only the temporary copies made when a card is shared are exposed to other apps. -->
+<!-- Only the temporary copies made when a card is shared are exposed to other apps, plus the
+     empty file the phone's camera app writes a new photo into (Photo button). -->
 <paths>
     <cache-path name="outgoing" path="outgoing/" />
+    <cache-path name="camera" path="camera/" />
 </paths>

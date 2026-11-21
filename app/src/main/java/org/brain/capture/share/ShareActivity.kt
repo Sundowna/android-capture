@@ -83,6 +83,11 @@ private sealed interface ShareUi {
  * panel is closed early.
  */
 class ShareActivity : ComponentActivity() {
+    companion object {
+        /** Where the content came from, when Brain itself sends it here (the Photo button: "Camera"). */
+        const val EXTRA_SOURCE_NAME = "org.brain.capture.SOURCE_NAME"
+    }
+
     private val ui = MutableStateFlow<ShareUi>(ShareUi.Saving("Saving…", null))
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,10 +107,12 @@ class ShareActivity : ComponentActivity() {
         }
         ui.value = ShareUi.Saving(what, null)
         val source = referrer?.takeIf { it.scheme == "android-app" }?.host
+        // Brain's own Photo button (widget, shortcut) says "Camera" instead of the app's name.
+        val sourceName = intent.getStringExtra(EXTRA_SOURCE_NAME)?.takeIf { source == packageName || source == null }
         val app = applicationContext
         AppScope.launch {
             val staged = runCatching {
-                Shares.stage(app, intent, source) { p -> ui.value = ShareUi.Saving(what, p) }
+                Shares.stage(app, intent, source, sourceName) { p -> ui.value = ShareUi.Saving(what, p) }
             }.getOrElse { ui.value = ShareUi.Failed(it.message ?: "Could not read the shared content", kept = false); return@launch }
             if (staged.kind == "link") ui.value = ShareUi.Saving("Saving link…", null)
             else if (staged.kind == "text") ui.value = ShareUi.Saving("Saving text…", null)
@@ -155,7 +162,8 @@ class ShareActivity : ComponentActivity() {
             }
             "text" -> ShareUi.Saved(notePath, id, "text", lines.joinToString(" ").take(120), "Text" + (source?.let { " from $it" } ?: ""))
             else -> ShareUi.Saved(notePath, id, "file", lines.firstOrNull() ?: "File",
-                (if (lines.size > 1) "${lines.size} files" else "File") + (source?.let { " from $it" } ?: ""))
+                (if (lines.size > 1) "${lines.size} files" else if (source == org.brain.capture.ui.Photos.SOURCE) "Photo" else "File") +
+                    (source?.let { " from $it" } ?: ""))
         }
     }
 

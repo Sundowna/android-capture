@@ -204,6 +204,23 @@ private fun HomeScreen(
             if (r == SnackbarResult.ActionPerformed) SwipeDeletes.undo(c.id)
         }
     }
+    // Photo button: "Saving photo…" while it is copied to the vault, then its new note opens.
+    var photoSaving by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val takePhoto = rememberTakePhoto(
+        onSaving = { photoSaving = snackScope.launch { snackbar.currentSnackbarData?.dismiss(); snackbar.showSnackbar("Saving photo…", duration = SnackbarDuration.Indefinite) } },
+        onDone = { id, message ->
+            photoSaving?.cancel(); photoSaving = null // cancelling takes the "Saving photo…" bar away
+            if (id != null) onCapture(CaptureRequest(noteId = id))
+            else if (message != null) snackScope.launch { snackbar.showSnackbar(message, duration = SnackbarDuration.Long) }
+        })
+    var attachOpen by remember { mutableStateOf(false) }
+    AttachSheet(attachOpen, appendTo = null, onDismiss = { attachOpen = false },
+        onSaving = { photoSaving = snackScope.launch { snackbar.currentSnackbarData?.dismiss(); snackbar.showSnackbar("Saving…", duration = SnackbarDuration.Indefinite) } },
+        onDone = { id, message ->
+            photoSaving?.cancel(); photoSaving = null
+            if (id != null) onCapture(CaptureRequest(noteId = id))
+            else if (message != null) snackScope.launch { snackbar.showSnackbar(message, duration = SnackbarDuration.Long) }
+        })
     val total by remember { dao.cardCount() }.collectAsState(0)
     val pendingRows by remember { dao.inProgress() }.collectAsState(emptyList())
     // Only recordings whose audio still exists, and not the one being recorded right now.
@@ -298,16 +315,18 @@ private fun HomeScreen(
                 }
             }
             item("modes") {
+                // The same buttons as on the note screen (plus Type); each starts a new note.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Type" to CaptureActivity.MODE_TYPE, "Paste" to CaptureActivity.MODE_PASTE).forEach { (label, m) ->
-                        Surface(onClick = { if (canRecord) onCapture(CaptureRequest(mode = m, type = Profiles.primary(ctx).id)) },
-                            shape = RoundedCornerShape(12.dp), color = Ink.Panel,
-                            modifier = Modifier.weight(1f).height(48.dp)) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(label, fontSize = 13.sp, color = if (canRecord) Ink.TextSoft else Ink.Bar)
-                            }
-                        }
-                    }
+                    BarButton("Type", R.drawable.ic_type, enabled = canRecord, modifier = Modifier.weight(1f)) {
+                        onCapture(CaptureRequest(mode = CaptureActivity.MODE_TYPE, type = Profiles.primary(ctx).id)) }
+                    // Pasted text usually needs no AI: Home's Paste starts as "Exact words" (if that type still exists).
+                    BarButton("Paste", R.drawable.ic_paste, enabled = canRecord, modifier = Modifier.weight(1f)) {
+                        val exact = Profiles.all(ctx).firstOrNull { it.id == "c-exact" }?.id
+                        onCapture(CaptureRequest(mode = CaptureActivity.MODE_PASTE, type = exact ?: Profiles.primary(ctx).id)) }
+                    // Photo: the phone's camera app, then a new photo note opens (talk or type to add words).
+                    BarButton("Photo", R.drawable.t_camera, enabled = canRecord, modifier = Modifier.weight(1f)) { takePhoto(null) }
+                    // Attach: Gallery, Files, Contact, Link or Location; then the new note opens.
+                    BarButton("Attach", R.drawable.ic_attach, enabled = canRecord, modifier = Modifier.weight(1f)) { attachOpen = true }
                 }
             }
             // A general problem that is not tied to a recording (e.g. microphone or storage).
@@ -337,7 +356,9 @@ private fun HomeScreen(
                     SwipeToDelete(onDelete = { swipeDelete(c) }) {
                         NoteCard(c, refresh, justSaved, canRecord,
                             onRecordMore = { onCapture(CaptureRequest(start = true, noteId = it.id)) },
-                            onOpen = { onCapture(CaptureRequest(noteId = it.id)) })
+                            onOpen = { onCapture(CaptureRequest(noteId = it.id)) },
+                            onType = { onCapture(CaptureRequest(mode = CaptureActivity.MODE_TYPE, noteId = it.id)) },
+                            onEdit = { onCapture(CaptureRequest(mode = CaptureActivity.MODE_EDIT, noteId = it.id)) })
                     }
                 }
             }

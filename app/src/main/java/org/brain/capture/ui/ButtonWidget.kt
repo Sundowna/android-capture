@@ -68,6 +68,18 @@ class ButtonWidget : AppWidgetProvider() {
         }
 
         fun views(ctx: Context, id: Int) = RemoteViews(ctx.packageName, R.layout.widget_button).apply {
+            if (typeOf(ctx, id) == Profiles.PHOTO) {
+                // Photo: the phone's camera, then the share panel (add to a note, voice comment).
+                setInt(R.id.wb_root, "setBackgroundResource", R.drawable.w_amber)
+                setImageViewResource(R.id.wb_icon, R.drawable.t_camera)
+                setInt(R.id.wb_icon, "setColorFilter", 0xFF2A2118.toInt())
+                setTextViewText(R.id.wb_label, "Photo")
+                setTextColor(R.id.wb_label, 0xFF2A2118.toInt())
+                setContentDescription(R.id.wb_root, "Take a photo")
+                setOnClickPendingIntent(R.id.wb_root, PendingIntent.getActivity(ctx, 1000 + id, PhotoActivity.intent(ctx),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+                return@apply
+            }
             val p = Profiles.get(ctx, typeOf(ctx, id))
             setInt(R.id.wb_root, "setBackgroundResource", if (p.private) R.drawable.w_panel else R.drawable.w_amber)
             setImageViewResource(R.id.wb_icon, typeIcon(p.icon))
@@ -98,8 +110,8 @@ class ButtonWidgetSetupActivity : ComponentActivity() {
                     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("One-tap button", fontFamily = Grotesk, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, color = Ink.Text)
-                        Text("Which type should this button start? One tap on it starts talking.", fontSize = 13.sp, color = Ink.TextDim)
-                        Profiles.all(this@ButtonWidgetSetupActivity).forEach { p ->
+                        Text("Which type should this button start? One tap on it starts talking; Photo opens the camera.", fontSize = 13.sp, color = Ink.TextDim)
+                        (Profiles.all(this@ButtonWidgetSetupActivity) + Profiles.PHOTO_SLOT).forEach { p ->
                             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (p.id == current) Ink.Raised else Ink.Panel)
                                 .clickable {
                                     ButtonWidget.setType(this@ButtonWidgetSetupActivity, id, p.id)

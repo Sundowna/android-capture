@@ -20,6 +20,8 @@ import org.brain.capture.vault.VaultWriter
 object CleanupStep {
     private const val TAG = "Cleanup"
     private const val DAY = 24 * 60 * 60 * 1000L
+    /** The cleanup result of a type without AI cleanup ("skipped: no AI cleanup for Exact words"). */
+    const val NO_CLEANUP = "skipped: no AI cleanup for"
 
     /** Id of the capture Gemma is cleaning right now, for the "Cleaning…" state on screen. */
     val cleaning = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -69,6 +71,11 @@ object CleanupStep {
     suspend fun reclean(ctx: Context, noteId: String, newType: String) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
         val note = dao.get(noteId) ?: return@withContext
+        // A type without AI cleanup has nothing to clean with: only the type changes.
+        if (org.brain.capture.types.Profiles.get(ctx, newType).noCleanup) {
+            (listOf(note) + dao.additions(noteId)).forEach { dao.setType(it.id, newType) }
+            return@withContext
+        }
         val rows = listOf(note) + dao.additions(noteId)
         // The vault note as it is now, so Undo can put it back exactly.
         val vault = if (note.isPrivate) null else Prefs(ctx).vaultUri?.let { VaultWriter(ctx, it) }
@@ -166,11 +173,13 @@ object CleanupStep {
         // An addition lives in the note it was added to; clean it there, as that note's type.
         val owner = c.appendTo?.let { dao.get(it) ?: return "skipped: note not found" } ?: c
         val today = java.time.LocalDate.now().toString()
+        // The note's capture type decides the instruction (editable in Settings → Capture types).
+        val profile = org.brain.capture.types.Profiles.get(ctx, owner.type)
+        // A type without AI cleanup keeps the exact words as they are.
+        if (profile.noCleanup) return "$NO_CLEANUP ${profile.name}"
 
         cleaning.value = c.id
         val t0 = SystemClock.elapsedRealtime()
-        // The note's capture type decides the instruction (editable in Settings → Capture types).
-        val profile = org.brain.capture.types.Profiles.get(ctx, owner.type)
         val prompt = CleanupText.prompt(segments, profile.instruction, profile.checklist, today, profile.mixed)
         var result: CleanupText.Result
         try {

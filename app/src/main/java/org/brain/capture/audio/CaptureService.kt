@@ -115,7 +115,8 @@ class CaptureService : Service() {
         goForeground()
         vibrate()
         // Load Gemma while the user talks, so cleanup can start as soon as the transcript is ready.
-        org.brain.capture.cleanup.GemmaHolder.warm(applicationContext)
+        // (Not for a type without AI cleanup: nothing to load.)
+        if (!org.brain.capture.types.Profiles.get(this, type).noCleanup) org.brain.capture.cleanup.GemmaHolder.warm(applicationContext)
         stopRequested = false
         cancelRequested = false
         pauseRequested = false

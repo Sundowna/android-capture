@@ -63,11 +63,14 @@ class BrainWidget : AppWidgetProvider() {
                 setTextViewText(SUB[i], p?.subtitle ?: "notes and recent captures")
                 setTextColor(TITLE[i], if (first) 0xFF2A2118.toInt() else 0xFFEEF0F2.toInt())
                 setTextColor(SUB[i], if (first) 0xD92A2118.toInt() else 0xFFC3C8CF.toInt())
-                setContentDescription(SLOT[i], if (p == null) "Open Brain" else "${p.name}, start talking")
-                setOnClickPendingIntent(SLOT[i], if (p == null)
-                    PendingIntent.getActivity(ctx, 30, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
-                else PendingIntent.getActivity(ctx, 20 + i, CaptureActivity.intent(ctx, p.id, start = true),
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+                val photo = p?.id == Profiles.PHOTO
+                setContentDescription(SLOT[i], when { p == null -> "Open Brain"; photo -> "Take a photo"; else -> "${p.name}, start talking" })
+                setOnClickPendingIntent(SLOT[i], when {
+                    p == null -> PendingIntent.getActivity(ctx, 30, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
+                    photo -> PendingIntent.getActivity(ctx, 31, PhotoActivity.intent(ctx), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                    else -> PendingIntent.getActivity(ctx, 20 + i, CaptureActivity.intent(ctx, p.id, start = true),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                })
             }
             // Gaps and the second row only where there are buttons on both sides.
             setViewVisibility(R.id.w_gap1, if (slots.size >= 2) View.VISIBLE else View.GONE)

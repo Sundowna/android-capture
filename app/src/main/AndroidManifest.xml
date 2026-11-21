@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Keeps the CPU running while transcribing with the screen off. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Attach → Location only: asked the first time it is used; one spot is saved, nothing is tracked. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Lets the app show "Shared from Files" instead of a package name. Not a permission:
          it only makes apps with a launcher icon visible to name lookups. -->
@@ -129,6 +132,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Photo from a widget or app-icon shortcut: the phone's camera, then the share panel. -->
+        <activity
+            android:name=".ui.PhotoActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.photo"
+            android:theme="@style/Theme.Capture.Panel" />
 
         <!-- Android Share menu: links, text, PDFs, images and other files. -->
         <activity

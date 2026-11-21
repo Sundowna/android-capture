@@ -25,6 +25,11 @@ class Prefs(context: Context) {
         get() = sp.getString("audio", "opus")!!
         set(v) = sp.edit().putString("audio", v).apply()
 
+    /** The card's share button: send the voice recordings along with the note (true) or leave them out. */
+    var shareAudio: Boolean
+        get() = sp.getBoolean("share_audio", true)
+        set(v) = sp.edit().putBoolean("share_audio", v).apply()
+
     var inboxFolder: String
         get() = sp.getString("inbox", "Inbox")!!
         set(v) = sp.edit().putString("inbox", v).apply()

@@ -38,6 +38,9 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.IconButton
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,11 +92,20 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
     val list = profiles ?: return
     var editing by remember { mutableStateOf<CaptureProfile?>(null) }
     var openBrain by remember { mutableStateOf(Profiles.widgetOpenBrain(ctx)) }
+    var photo by remember { mutableStateOf(Profiles.widgetPhoto(ctx)) }
     val onWidget = list.count { it.onWidget }
-    val room = Profiles.WIDGET_SLOTS - if (openBrain) 1 else 0
+    val room = Profiles.WIDGET_SLOTS - (if (openBrain) 1 else 0) - (if (photo) 1 else 0)
     val switches = part != TypesPart.Types
     val reorder = part == TypesPart.Types
     var primaryId by remember { mutableStateOf(Profiles.primary(ctx).id) }
+    // The last deleted type, its place and whether it was the default: Undo puts it back for 8 s.
+    var deleted by remember { mutableStateOf<Triple<CaptureProfile, Int, Boolean>?>(null) }
+    LaunchedEffect(deleted) { if (deleted != null) { delay(8000); deleted = null } }
+    val deleteType = { p: CaptureProfile, i: Int ->
+        deleted = Triple(p, i, p.id == primaryId)
+        Profiles.delete(ctx, p.id); primaryId = Profiles.primary(ctx).id
+        Shortcuts.update(ctx); BrainWidget.refresh(ctx)
+    }
 
     Text(when (part) {
         TypesPart.Both -> "Choose the widget's buttons. Tap a type to edit its name, icon or AI instruction."
@@ -101,7 +113,20 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
         TypesPart.Types -> "Each type has its own instruction for the AI. Tap one to edit it; ↑ moves it up."
     }, fontSize = 13.sp, color = Ink.TextDim)
     if (part == TypesPart.Types) DefaultTypePicker(list, primaryId) { Profiles.setPrimary(ctx, it); primaryId = it; Shortcuts.update(ctx) }
+    val UndoRow = @Composable { deleted?.let { (p, at, wasPrimary) ->
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Ink.Raised).padding(start = 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("Deleted ${p.name.ifBlank { "Unnamed" }}", Modifier.weight(1f), fontSize = 14.sp, color = Ink.Text)
+            TextButton(onClick = {
+                val now = Profiles.all(ctx).toMutableList()
+                if (now.none { it.id == p.id }) { now.add(at.coerceIn(0, now.size), p); Profiles.save(ctx, now) }
+                if (wasPrimary) { Profiles.setPrimary(ctx, p.id); primaryId = p.id }
+                deleted = null; Shortcuts.update(ctx); BrainWidget.refresh(ctx)
+            }) { Text("Undo", color = Ink.Amber, fontWeight = FontWeight.SemiBold) }
+        }
+    } }
     list.forEachIndexed { i, p ->
+        if (reorder && deleted?.second == i) UndoRow()
         // On the widget page a tap switches the button; elsewhere it opens the type.
         val canSwitch = p.onWidget || onWidget < room
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
@@ -118,6 +143,9 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
                     .joinToString(" · ") }, fontSize = 12.sp, color = Ink.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (reorder && i > 0) TextButton(onClick = { Profiles.move(ctx, p.id, -1); Shortcuts.update(ctx); BrainWidget.refresh(ctx) }) { Text("↑") }
+            if (reorder && list.size > 1) IconButton(onClick = { deleteType(p, i) }) {
+                MIcon(painterResource(R.drawable.ic_delete), "Delete ${p.name}", Modifier.size(20.dp), tint = Ink.TextDim)
+            }
             if (switches) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Switch(checked = p.onWidget, enabled = canSwitch, onCheckedChange = {
                     Profiles.put(ctx, p.copy(onWidget = it)); Shortcuts.update(ctx); BrainWidget.refresh(ctx)
@@ -126,6 +154,7 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
             }
         }
     }
+    if (reorder && (deleted?.second ?: -1) >= list.size) UndoRow()
     if (switches) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Open Brain button", fontSize = 15.sp, color = Ink.Text)
@@ -133,15 +162,27 @@ fun CaptureTypesSettings(widgetOnly: Boolean = false, part: TypesPart = if (widg
         }
         Switch(checked = openBrain, onCheckedChange = {
             // Turning it on needs a free slot: the last type on the widget makes room.
-            if (it && onWidget >= Profiles.WIDGET_SLOTS) list.lastOrNull { p -> p.onWidget }?.let { p -> Profiles.put(ctx, p.copy(onWidget = false)) }
+            if (it && onWidget + (if (photo) 1 else 0) >= Profiles.WIDGET_SLOTS) list.lastOrNull { p -> p.onWidget }?.let { p -> Profiles.put(ctx, p.copy(onWidget = false)) }
             openBrain = it; Profiles.setWidgetOpenBrain(ctx, it); BrainWidget.refresh(ctx)
         }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
     }
+    if (switches) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Photo button", fontSize = 15.sp, color = Ink.Text)
+            Text("Opens the camera, then lets you add the photo to a note", fontSize = 12.sp, color = Ink.TextDim)
+        }
+        Switch(checked = photo, onCheckedChange = {
+            if (it && onWidget + (if (openBrain) 1 else 0) >= Profiles.WIDGET_SLOTS) list.lastOrNull { p -> p.onWidget }?.let { p -> Profiles.put(ctx, p.copy(onWidget = false)) }
+            photo = it; Profiles.setWidgetPhoto(ctx, it); BrainWidget.refresh(ctx)
+        }, colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
+    }
+    if (part == TypesPart.Types) TextButton(onClick = { Shortcuts.pinPhoto(ctx) }) { Text("Add a one-tap Photo icon to the home screen") }
     if (part != TypesPart.Widget) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = { editing = Profiles.newProfile(private = false) }) { Text("+ New type") }
         TextButton(onClick = { editing = Profiles.newProfile(private = true) }) { Text("+ New private type") }
     }
-    editing?.let { e -> ProfileEditor(e, canDelete = list.size > 1 && list.any { it.id == e.id }, onDone = {
+    editing?.let { e -> ProfileEditor(e, canDelete = list.size > 1 && list.any { it.id == e.id },
+        onDelete = { val i = list.indexOfFirst { it.id == e.id }; if (i >= 0) deleteType(list[i], i) }, onDone = {
         editing = null; Shortcuts.update(ctx); BrainWidget.refresh(ctx)
     }) }
 }
@@ -182,10 +223,9 @@ private fun DefaultTypePicker(list: List<CaptureProfile>, current: String, pick:
 }
 
 @Composable
-private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () -> Unit) {
+private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDelete: () -> Unit, onDone: () -> Unit) {
     val ctx = LocalContext.current
     var p by remember { mutableStateOf(start) }
-    var confirmDelete by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     // Back or Cancel with unsaved changes asks first; a tap outside can't close it (there is no outside).
     val leave = { if (p != start) confirmDiscard = true else onDone() }
@@ -219,6 +259,17 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
                         }
                     }
                 }
+                // AI cleanup on or off: off keeps the exact words and is fastest (the AI isn't even loaded).
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Clean up with AI", fontSize = 15.sp, color = Ink.Text)
+                        Text(if (p.noCleanup) "Off: notes keep your exact words, fastest" else "On: tidied by the AI on this phone",
+                            fontSize = 12.sp, color = Ink.TextDim)
+                    }
+                    Switch(checked = !p.noCleanup, onCheckedChange = { p = p.copy(noCleanup = !it) },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Ink.Amber, checkedThumbColor = Ink.OnAmber))
+                }
+                if (!p.noCleanup) {
                 OutlinedTextField(p.instruction, { p = p.copy(instruction = it) }, label = { Text("Instruction for the AI") },
                     minLines = 5, modifier = Modifier.fillMaxWidth())
                 Text("The app adds the rules that keep every line linked to your exact words, and the title.",
@@ -242,9 +293,10 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
                     p.mixed -> "Short paragraphs for connected thoughts, bullets for lists"
                     else -> "One bullet per point"
                 }, fontSize = 12.sp, color = Ink.TextDim)
+                }
                 if (p.private) Text("Private: notes of this type stay inside the app and never go to the vault.", fontSize = 12.sp, color = Ink.Blue)
                 if (p.name.isNotBlank()) TextButton(onClick = { Shortcuts.pin(ctx, p) }) { Text("Add a one-tap icon to the home screen") }
-                if (canDelete) TextButton(onClick = { confirmDelete = true }) { Text("Delete this type", color = Ink.Error) }
+                if (canDelete) TextButton(onClick = { onDelete(); onDone() }) { Text("Delete this type", color = Ink.Error) }
             }
         }
       }
@@ -256,13 +308,6 @@ private fun ProfileEditor(start: CaptureProfile, canDelete: Boolean, onDone: () 
         confirmButton = { TextButton(onClick = { confirmDiscard = false; onDone() }) { Text("Discard", color = Ink.Error) } },
         dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") } },
     )
-    if (confirmDelete) AlertDialog(
-        onDismissRequest = { confirmDelete = false }, containerColor = Ink.Panel,
-        title = { Text("Delete ${p.name}?") },
-        text = { Text("Notes already saved keep their text. New notes can't use this type any more; its widget button and icon go away.") },
-        confirmButton = { TextButton(onClick = { Profiles.delete(ctx, p.id); confirmDelete = false; onDone() }) { Text("Delete", color = Ink.Error) } },
-        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Keep") } },
-    )
 }
 
 /** Home-screen shortcuts: one per type on long-press of the app icon, and pinned one-tap icons. */
@@ -271,7 +316,9 @@ object Shortcuts {
         val sm = ctx.getSystemService(ShortcutManager::class.java) ?: return@runCatching
         val list = Profiles.all(ctx).filter { it.name.isNotBlank() }
         val max = sm.maxShortcutCountPerActivity.coerceAtMost(4)
-        sm.dynamicShortcuts = list.take(max).mapIndexed { i, p -> info(ctx, p).setRank(i).build() }
+        // The types, then Photo last (camera, then the share panel); drag any of them to the home screen.
+        sm.dynamicShortcuts = list.take(max - 1).mapIndexed { i, p -> info(ctx, p).setRank(i).build() } +
+            photoInfo(ctx).setRank(max - 1).build()
         // Keep pinned icons in step with renamed types; disable those whose type was deleted.
         val ids = list.map { "type-${it.id}" }.toSet()
         sm.updateShortcuts(list.map { info(ctx, it).build() }.filter { s -> sm.pinnedShortcuts.any { it.id == s.id } })
@@ -286,6 +333,19 @@ object Shortcuts {
         }
         sm.requestPinShortcut(info(ctx, p).build(), null)
     }
+
+    fun pinPhoto(ctx: Context) {
+        val sm = ctx.getSystemService(ShortcutManager::class.java)
+        if (sm?.isRequestPinShortcutSupported != true) {
+            Toast.makeText(ctx, "Your home screen doesn't accept pinned icons", Toast.LENGTH_LONG).show(); return
+        }
+        sm.requestPinShortcut(photoInfo(ctx).build(), null)
+    }
+
+    private fun photoInfo(ctx: Context) = ShortcutInfo.Builder(ctx, "photo")
+        .setShortLabel("Photo").setLongLabel("Photo: take a picture")
+        .setIcon(Icon.createWithAdaptiveBitmap(iconBitmap(ctx, Profiles.PHOTO_SLOT)))
+        .setIntent(PhotoActivity.intent(ctx))
 
     private fun info(ctx: Context, p: CaptureProfile) = ShortcutInfo.Builder(ctx, "type-${p.id}")
         .setShortLabel(p.name.ifBlank { "Talk" }).setLongLabel("${p.name}: start talking")

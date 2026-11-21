@@ -110,7 +110,8 @@ private fun Meta(text: String, color: Color = MaterialTheme.colorScheme.onSurfac
  * appear here). [justSaved] turns the header green for a few seconds after saving.
  */
 @Composable
-fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit, onOpen: (Capture) -> Unit = {}) {
+fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, onRecordMore: (Capture) -> Unit, onOpen: (Capture) -> Unit = {},
+             onType: (Capture) -> Unit = {}, onEdit: (Capture) -> Unit = {}) {
     val ctx = LocalContext.current
     val b = brand()
     var view by remember(c.id) { mutableStateOf(Notes.cached(c.id)) }
@@ -122,9 +123,9 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
     val folder = c.notePath?.substringBeforeLast('/') ?: ""
 
     var expanded by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf(false) }
-    var typing by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    // Editing and adding happen on the note screen, never in a pop-up over the list.
+    val editing = { onEdit(c) }
     val scope = rememberCoroutineScope()
     val border by animateColorAsState(if (justSaved) b.success.copy(alpha = 0.5f) else Color.Transparent, label = "b")
 
@@ -159,10 +160,10 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                     SharedFiles(c, onTap = { onOpen(c) })
                     val caption = text.lines().drop(1).joinToString("\n").trim() // first line is "Shared from …"
                     // Tap opens the note (like every other card); long-press edits the caption.
-                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, { onOpen(c) })
+                    if (caption.isNotEmpty()) BodyText(caption, expanded, { expanded = it }, editing, view?.fromVault == true, { onOpen(c) })
                 }
                 else -> when {
-                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, { editing = true }, view?.fromVault == true, { onOpen(c) })
+                    text.isNotBlank() -> BodyText(text, expanded, { expanded = it }, editing, view?.fromVault == true, { onOpen(c) })
                     view != null -> Text("(no speech recognised)", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(end = 8.dp))
@@ -176,13 +177,14 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
                 // Delete sits apart on the left, away from the everyday actions.
                 CardAction(painterResource(R.drawable.ic_delete), "Delete note") { deleting = true }
                 Box(Modifier.weight(1f))
-                if (!c.isPrivate) CardAction(painterResource(R.drawable.ic_pencil), "Open in Obsidian") {
+                if (!c.isPrivate) CardAction(painterResource(R.drawable.ic_obsidian), "Open in Obsidian") {
                     val path = c.notePath
                     if (path == null || !openInObsidian(ctx, path))
                         Toast.makeText(ctx, "Could not open Obsidian. Is it installed?", Toast.LENGTH_SHORT).show()
                 }
                 if (!c.isPrivate) {
-                    CardAction(painterResource(R.drawable.ic_text_add), "Add typed text") { typing = true }
+                    // T+ opens the note ready to type; mic+ opens it and starts recording at once.
+                    CardAction(painterResource(R.drawable.ic_text_add), "Add typed text", enabled = canRecord) { onType(c) }
                     CardAction(painterResource(R.drawable.ic_mic_add), "Record more for this note", enabled = canRecord) { onRecordMore(c) }
                 }
                 ShareAction(c)
@@ -191,8 +193,6 @@ fun NoteCard(c: Capture, refresh: Int, justSaved: Boolean, canRecord: Boolean, o
         }
     }
 
-    if (editing) EditDialog(c, onDone = { editing = false; reload++ })
-    if (typing) TypeDialog(c, onDone = { typing = false; reload++ })
     if (deleting) {
         val attached = if (c.kind == "voice") "its recordings" else if (c.kind == "file") "its files" else null
         AlertDialog(
@@ -416,83 +416,4 @@ private fun Thumb(f: FileInfo, onClick: () -> Unit) {
     val m = Modifier.height(if (f.mime == "application/pdf") 96.dp else 84.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
     bmp?.let { Image(it, contentDescription = f.name, modifier = m.aspectRatio(it.width.toFloat() / it.height.coerceAtLeast(1)),
         contentScale = ContentScale.Crop) } ?: Box(m.width(84.dp).background(MaterialTheme.colorScheme.surfaceVariant))
-}
-
-// ---- Dialogs ----
-
-/** In-app editing. Saves only if the note was not changed elsewhere since the editor opened. */
-@Composable
-private fun EditDialog(c: Capture, onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var original by remember { mutableStateOf<String?>(null) }
-    var body by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    LaunchedEffect(c.id) {
-        runCatching { Notes.openForEdit(ctx, c) }
-            .onSuccess { (b, o) -> body = b; original = o }
-            .onFailure { error = it.message }
-    }
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDone() },
-        title = { Text("Edit note") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (original == null && error == null) LinearProgressIndicator(Modifier.fillMaxWidth())
-                else OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth(), minLines = 6, enabled = !saving)
-                if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = original != null && !saving, onClick = {
-                saving = true; error = null
-                scope.launch {
-                    runCatching { Notes.saveEdit(ctx, c, original!!, body) }
-                        .onSuccess { ok ->
-                            if (ok) onDone()
-                            else error = "This note was changed in Obsidian while you were editing, so nothing was " +
-                                "saved. Your text is still here: copy it, or use the pencil to edit in Obsidian."
-                        }
-                        .onFailure { error = it.message }
-                    saving = false
-                }
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(enabled = !saving, onClick = onDone) { Text("Cancel") } },
-    )
-}
-
-/** Adds typed text to the end of the note. */
-@Composable
-private fun TypeDialog(c: Capture, onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDone() },
-        title = { Text("Add to note") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), minLines = 3, enabled = !saving,
-                    placeholder = { Text("Type what you want to add…") })
-                if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = text.isNotBlank() && !saving, onClick = {
-                saving = true; error = null
-                scope.launch {
-                    // Its own row, so the home screen's Undo can take it back out.
-                    runCatching { org.brain.capture.pipeline.TextCapture.append(ctx, c, text.trim()) }.onSuccess { onDone() }.onFailure { error = it.message }
-                    saving = false
-                }
-            }) { Text("Add") }
-        },
-        dismissButton = { TextButton(enabled = !saving, onClick = onDone) { Text("Cancel") } },
-    )
 }

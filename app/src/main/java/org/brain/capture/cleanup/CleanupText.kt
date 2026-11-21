@@ -329,6 +329,8 @@ If the transcript holds nothing to list, write only the title line. Never make u
     /** Start positions where [text] fills whole lines: at a line start and followed by a line end. */
     private fun lineOccurrences(body: String, text: String): List<Int> {
         val out = ArrayList<Int>()
+        // An empty text "occurs" everywhere and indexOf never moves past the end: it would loop for ever.
+        if (text.isEmpty()) return out
         var from = 0
         while (true) {
             val i = body.indexOf(text, from)
