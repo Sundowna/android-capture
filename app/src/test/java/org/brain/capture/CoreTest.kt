@@ -230,3 +230,40 @@ class TypeChangeTest {
         assertEquals("Change type to…", org.brain.capture.types.TypeChange.header(ai = false))
     }
 }
+
+/** Settings: AI cleanup models to download, and the advice for this phone. */
+class ModelCatalogTest {
+    private val c = org.brain.capture.cleanup.ModelCatalog
+
+    // Android reports a bit less than the phone's memory: a 6 GB Pixel 6a reports about 5.86 GB.
+    @Test fun memoryIsShownAsPeopleKnowIt() {
+        assertEquals(6, c.memoryGb(5_860_835_328L))
+        assertEquals(12, c.memoryGb(12_025_274_368L))
+        assertEquals(4, c.memoryGb(3_800_000_000L))
+    }
+
+    // Gemma 4 E2B was tested on a 6 GB Pixel 6a (loads in 30 s, cleans in 6 s); below 6 GB nothing is advised.
+    @Test fun recommendationFollowsMemory() {
+        assertEquals(c.GEMMA_E2B, c.recommended(12)?.id)
+        assertEquals(c.GEMMA_E2B, c.recommended(6)?.id)
+        assertNull(c.recommended(4))
+        assertNull(c.recommended(3))
+    }
+
+    // Every link is a direct, login-free Hugging Face download of a .litertlm file the app can import.
+    @Test fun everyModelHasADirectDownloadLink() {
+        assertEquals(listOf(c.GEMMA_E2B), c.MODELS.map { it.id })
+        c.MODELS.forEach {
+            assertTrue(it.url, it.url.startsWith("https://huggingface.co/litert-community/"))
+            assertTrue(it.url, it.url.substringBefore('?').endsWith(".litertlm"))
+            assertTrue(it.size, it.size.endsWith(" GB"))
+            assertTrue(it.note.isNotBlank())
+        }
+    }
+
+    @Test fun adviceNamesThePhoneAndWhatToDo() {
+        assertEquals("Pixel 7 Pro, 12 GB memory: Gemma 4 E2B runs well here.", c.advice("Pixel 7 Pro", 12))
+        assertTrue(c.advice("Pixel 6a", 6).startsWith("Pixel 6a, 6 GB memory: Gemma 4 E2B runs well;"))
+        assertTrue(c.advice("Old phone", 4).contains("exact words"))
+    }
+}

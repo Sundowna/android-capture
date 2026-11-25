@@ -198,7 +198,7 @@ While recording or transcribing ─► Notification (F28)
 - Vault folder Choose / Change; inbox folder name with the folders below.
 
 ### F24 · Transcription and AI model
-- Speech model (Replace, or 1. Download / 2. Import); Language Auto / Deutsch / English; AI cleanup model: name and size with Replace and "Remove model" (asks first), or "Import model file" with a % bar.
+- Speech model (Replace, or 1. Download / 2. Import); Language Auto / Deutsch / English; AI cleanup model: name and size with Replace and "Remove model" (asks first), or, before a model is installed, the advice for this phone (name, memory, what suits it), the download list (Gemma 4 E2B · 2.6 GB, Download opens the browser) and "Import model file" with a % bar. The advice line also shows when a model is installed.
 
 ### F25 · Audio & display
 - Audio in the vault: Opus / WAV; Notes on the home screen: 5 / 10 / 20; Sharing a note: With voice recording / Without.

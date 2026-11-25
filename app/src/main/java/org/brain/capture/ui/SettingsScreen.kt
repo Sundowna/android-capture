@@ -292,8 +292,9 @@ fun GemmaSetup() {
         else "Not installed: notes keep your exact words") {
         if (f != null) OutlinedButton(enabled = progress == -1f, onClick = { pick.launch(arrayOf("*/*")) }) { Text("Replace") }
     }
+    ModelAdvice(showDownloads = f == null) { error = it }
     if (f == null) {
-        Text("Copy the Gemma model file (.litertlm, for example gemma-4-E2B-it) to this phone, then import it. It runs on the phone; nothing goes online.",
+        Text("Download it once with your browser, then import it. It runs on this phone; nothing goes online.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Button(enabled = progress == -1f, onClick = { pick.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) { Text("Import model file") }
     } else if (progress == -1f) {
@@ -319,6 +320,38 @@ fun GemmaSetup() {
         }) { Text("Remove model", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { androidx.compose.material3.TextButton(onClick = { askRemove = false }) { Text("Keep model") } },
     )
+}
+
+/**
+ * What suits this phone (its name and memory) and, before a model is installed, the download links
+ * from [org.brain.capture.cleanup.ModelCatalog]. Downloads open in the browser; the app stays offline.
+ */
+@Composable
+private fun ModelAdvice(showDownloads: Boolean, onError: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val catalog = org.brain.capture.cleanup.ModelCatalog
+    val gb = remember {
+        val info = android.app.ActivityManager.MemoryInfo()
+        (ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(info)
+        catalog.memoryGb(info.totalMem)
+    }
+    val best = catalog.recommended(gb)
+    Text(catalog.advice(android.os.Build.MODEL, gb), style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (!showDownloads) return
+    catalog.MODELS.forEach { m ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("${m.name} · ${m.size}", style = MaterialTheme.typography.bodyMedium)
+                Text(if (m == best) "Suits this phone. ${m.note}" else m.note, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(onClick = {
+                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(m.url))) }
+                    .onFailure { onError("No browser found to download the model.") }
+            }) { Text("Download") }
+        }
+    }
 }
 
 @Composable

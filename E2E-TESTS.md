@@ -134,6 +134,8 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | T07-5 | Edit the vault note in Obsidian before cleanup finishes. | Vault note left alone ("note was changed"). |
 | T07-6 | Remove the model (Settings), record. | "No cleanup model on this phone yet."; Type has one "Save" button. |
 | T07-7 | Settings → Transcription → Import model file (a non-.litertlm file, then a real one). | Wrong file → plain error. Real file → % bar, name and size shown; Replace and Remove model (asks first). |
+| T07-7b | Settings → Transcription on a phone without the AI model (Pixel 6a, then Pixel 7 Pro). | Advice line names the phone and its memory (6a: "Pixel 6a, 6 GB memory: Gemma 4 E2B runs well; …"); Gemma 4 E2B · 2.6 GB "Suits this phone"; Download opens the Hugging Face file in the browser. |
+| T07-7c | Release APK: import Gemma 4 E2B, Type → Save with AI. | No crash; note cleaned into bullets with sources (6a: loads in about 30 s, cleans in about 6 s). |
 
 ## 8. Widgets, tile, shortcuts
 

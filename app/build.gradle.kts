@@ -15,8 +15,8 @@ android {
         applicationId = "org.brain.capture"
         minSdk = 31
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.4.1"
+        versionCode = 8
+        versionName = "1.5"
         ndk { abiFilters += "arm64-v8a" }
     }
 
