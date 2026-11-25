@@ -99,6 +99,9 @@ object CleanupStep {
             }
             Log.i(TAG, "${s.id} re-cleaned as ${profile.name}: $result")
         }
+        // The note's capture_type follows the new type even when no voice section was cleaned
+        // (typed notes, photo notes with additions only); before the Undo snapshot, so Undo puts it back.
+        if (!note.isPrivate) runCatching { retype(ctx, note, newType) }.onFailure { Log.e(TAG, "Type change in the vault failed", it) }
         dao.touch(noteId, System.currentTimeMillis())
         lastReclean.value = RecleanUndo(noteId, rows, path, before, path?.let { vault.read(it) })
         org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Recleaned(noteId))
