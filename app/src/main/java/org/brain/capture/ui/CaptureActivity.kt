@@ -378,13 +378,15 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
             // Every opened note shows its capture type at the top right, like on Home's widget and cards.
             // A finished note: pick a type (or the same one) and it is cleaned again with that instruction;
             // types without AI cleanup aren't offered for that (except the note's own, so the chip names it).
+            // Without the AI model, picking only changes the type (TypeChange), so the chip still works.
             @Composable
             fun NoteTypeChip(n: Capture) {
-                val canPick = n.state == CaptureStates.SAVED && recording == null && !noteBusy && gemmaInstalled
-                TypeChip(n.type, profiles.orEmpty().filter { it.private == n.isPrivate && (!it.noCleanup || it.id == n.type) },
-                    again = true, enabled = canPick) { t ->
+                val canPick = n.state == CaptureStates.SAVED && recording == null && !noteBusy
+                TypeChip(n.type, org.brain.capture.types.TypeChange.offered(profiles.orEmpty(), n.type, n.isPrivate, gemmaInstalled),
+                    header = org.brain.capture.types.TypeChange.header(gemmaInstalled), enabled = canPick) { t ->
                     if (n.isPrivate) privateKind = t else kind = t
-                    userPickedView = true; view = View.Clean
+                    val picked = profiles.orEmpty().firstOrNull { it.id == t }
+                    if (picked != null && org.brain.capture.types.TypeChange.cleansAgain(picked, gemmaInstalled)) { userPickedView = true; view = View.Clean }
                     org.brain.capture.share.AppScope.launch { CleanupStep.reclean(ctx, n.id, t) }
                 }
             }
@@ -570,7 +572,7 @@ private fun ViewTab(label: String, sub: String, on: Boolean, onClick: () -> Unit
 
 /** The capture type for this note; a tap opens the list (Settings → Capture types edits them). */
 @Composable
-private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, again: Boolean = false,
+private fun TypeChip(selected: String, types: List<org.brain.capture.types.CaptureProfile>, header: String? = null,
                      enabled: Boolean = true, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val current = types.firstOrNull { it.id == selected } ?: types.first()
@@ -584,7 +586,7 @@ private fun TypeChip(selected: String, types: List<org.brain.capture.types.Captu
             Text("${current.name} ▾", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink.Amber)
         }
         androidx.compose.material3.DropdownMenu(open, { open = false }, containerColor = Ink.Panel) {
-            if (again) Text("Clean again as…", fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+            if (header != null) Text(header, fontSize = 12.sp, color = Ink.TextDim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
             types.forEach { t ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Column {

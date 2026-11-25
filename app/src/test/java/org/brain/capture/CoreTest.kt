@@ -198,3 +198,35 @@ class StreamingTest {
         } finally { f.delete() }
     }
 }
+
+/** Changing a finished note's capture type from its type chip. */
+class TypeChangeTest {
+    private fun p(id: String, private: Boolean = false, noCleanup: Boolean = false) =
+        org.brain.capture.types.CaptureProfile(id, id, "", "bulb", "", checklist = false, private = private, onWidget = false, noCleanup = noCleanup)
+    private val types = listOf(p("idea"), p("task"), p("exact", noCleanup = true), p("private", private = true))
+    private fun ids(note: String, isPrivate: Boolean, ai: Boolean) =
+        org.brain.capture.types.TypeChange.offered(types, note, isPrivate, ai).map { it.id }
+
+    // Without a cleanup model the chip still changes the type: every type of the note's zone is offered.
+    @Test fun withoutModelEveryTypeOfTheZoneIsOffered() {
+        assertEquals(listOf("idea", "task", "exact"), ids("idea", isPrivate = false, ai = false))
+        assertEquals(listOf("private"), ids("private", isPrivate = true, ai = false))
+    }
+
+    // With the model, picking cleans again, so types without AI cleanup are left out (except the note's own).
+    @Test fun withModelTypesWithoutCleanupAreLeftOut() {
+        assertEquals(listOf("idea", "task"), ids("idea", isPrivate = false, ai = true))
+        assertEquals(listOf("idea", "task", "exact"), ids("exact", isPrivate = false, ai = true))
+    }
+
+    @Test fun onlyCleansAgainWithModelAndCleanupType() {
+        assertTrue(org.brain.capture.types.TypeChange.cleansAgain(p("task"), ai = true))
+        assertFalse(org.brain.capture.types.TypeChange.cleansAgain(p("task"), ai = false))
+        assertFalse(org.brain.capture.types.TypeChange.cleansAgain(p("exact", noCleanup = true), ai = true))
+    }
+
+    @Test fun menuHeaderSaysWhatPickingDoes() {
+        assertEquals("Clean again as…", org.brain.capture.types.TypeChange.header(ai = true))
+        assertEquals("Change type to…", org.brain.capture.types.TypeChange.header(ai = false))
+    }
+}

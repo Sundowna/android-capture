@@ -71,9 +71,14 @@ object CleanupStep {
     suspend fun reclean(ctx: Context, noteId: String, newType: String) = withContext(Dispatchers.IO) {
         val dao = CaptureDb.get(ctx).dao()
         val note = dao.get(noteId) ?: return@withContext
-        // A type without AI cleanup has nothing to clean with: only the type changes.
-        if (org.brain.capture.types.Profiles.get(ctx, newType).noCleanup) {
+        // No AI model on the phone, or a type without AI cleanup: nothing to clean with, only the type
+        // changes (in the app and in the vault note's capture_type line).
+        val ai = GemmaHolder.modelFile(ctx) != null
+        if (!org.brain.capture.types.TypeChange.cleansAgain(org.brain.capture.types.Profiles.get(ctx, newType), ai)) {
             (listOf(note) + dao.additions(noteId)).forEach { dao.setType(it.id, newType) }
+            if (!note.isPrivate) runCatching { retype(ctx, note, newType) }.onFailure { Log.e(TAG, "Type change in the vault failed", it) }
+            dao.touch(noteId, System.currentTimeMillis())
+            org.brain.capture.ui.BrainWidget.refresh(ctx)
             return@withContext
         }
         val rows = listOf(note) + dao.additions(noteId)
@@ -98,6 +103,20 @@ object CleanupStep {
         lastReclean.value = RecleanUndo(noteId, rows, path, before, path?.let { vault.read(it) })
         org.brain.capture.pipeline.Undo.record(org.brain.capture.pipeline.Undo.Action.Recleaned(noteId))
         org.brain.capture.ui.BrainWidget.refresh(ctx)
+    }
+
+    /** Sets the vault note's capture_type line to [type]; the rest of the note stays as it is. */
+    private suspend fun retype(ctx: Context, owner: Capture, type: String) {
+        val dao = CaptureDb.get(ctx).dao()
+        val vault = VaultWriter(ctx, Prefs(ctx).vaultUri ?: return)
+        val path = Notes.locate(ctx, vault, owner) ?: return
+        val note = vault.read(path) ?: return
+        val updated = CleanupText.withCaptureType(note, type)
+        if (updated == note) return
+        dao.putEdit(PendingEdit(owner.id, path, note, updated))
+        vault.overwrite(path, updated)
+        dao.clearEdit(owner.id)
+        Notes.forget(owner.id)
     }
 
     private suspend fun recleanOne(ctx: Context, owner: Capture, s: Capture, profile: org.brain.capture.types.CaptureProfile): String {

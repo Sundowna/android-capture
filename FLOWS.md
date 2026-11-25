@@ -153,9 +153,10 @@ While recording or transcribing ─► Notification (F28)
 - After discarding a new note the screen resets to an empty note; an addition leaves the note as it was.
 
 ### F14 · Clean again as another type
-- Entry: the type chip ▾ on a finished note (dimmed while recording, transcribing, cleaning, or without the AI model).
+- Entry: the type chip ▾ on a finished note (dimmed while recording, transcribing or cleaning).
 - Shows a list of the zone's types with subtitles ("Clean again as…"); types without AI cleanup are not offered except the note's own.
 - Pick one → the view switches to Clean, "Cleaning on this phone…", then the new version; the vault note's clean block is swapped. Undo (note screen or Home pill "Undo re-clean") puts the previous version back.
+- Without the AI model: the list is headed "Change type to…" and shows all the zone's types; picking one only changes the type (chip, card, the vault note's `capture_type`), the text stays, no Undo entry.
 
 ### F15 · Delete a note and Home Undo
 - Bin icon → "Delete this note?" (moves to the vault's `.trash`, or deleted for good for private) → Delete / Cancel.

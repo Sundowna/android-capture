@@ -116,7 +116,8 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | T06-3 | F15 | Bin icon → Delete. | Dialog explains .trash; note, its audio and files move to the vault's `.trash`. |
 | T06-4 | F15 | Swipe a card left halfway and let go; then past the line. | Short of 45 % springs back. Past it: red strip, bin grows, haptic tick; snackbar with Undo for 5 s; Undo restores. |
 | T06-5 | F15 | Delete, then Home Undo pill. | "Undo delete" pill; restores the note (another name if taken). Private delete: deleted for good after Undo lapses. |
-| T06-6 | F14 | Voice note → type chip → "Clean again as…" Task. | Whole note re-cleaned as a checklist; `capture_type` updated; Undo brings the old type and clean version back. Chip dimmed while recording/cleaning/no model. |
+| T06-6 | F14 | Voice note → type chip → "Clean again as…" Task. | Whole note re-cleaned as a checklist; `capture_type` updated; Undo brings the old type and clean version back. Chip dimmed while recording/cleaning. |
+| T06-6b | F14 | On a phone without the AI model: finished voice note → type chip → "Change type to…" Task. | Chip is tappable; list shows every non-private type incl. Exact words; picking Task changes chip and card to Task, `capture_type: task` in the vault note, text unchanged, no "Cleaning…". |
 | T06-7 | F02 | Type chip on a new recording: change type while recording. | Note goes to the new type. |
 | T06-8 | F17 | Force a failure (vault missing) during a voice save. | Progress card red border, "The recording is safe on the phone.", Try again saves it once the vault is back. |
 | T06-9 | F01 | Home Undo after: new note, addition, re-clean. | Right label and result message; lapses after 10 min or app close. |
@@ -232,7 +233,7 @@ Rule: a change that adds or changes a feature or flow adds or updates its test h
 | F34 Pin a one-tap icon | T08-7, T08-12 |
 | F12 First run | T01-1, T01-2 |
 | F13 Discard | T03-4, T03-5 |
-| F14 Clean again | T06-6 |
+| F14 Clean again | T06-6, T06-6b |
 | F15 Delete + Undo | T06-3…5 |
 | F16 Attach | T05-3…8 |
 | F17 Messages and errors | T06-8, T03-10, T05-14 |

@@ -310,3 +310,18 @@ $FEEDBACK_RULES"""
         }
     }
 }
+
+/**
+ * Changing a finished note's type from its type chip. With the AI model on the phone, picking a type
+ * cleans the note again with it; without the model (or for a type without AI cleanup) only the type
+ * changes, so the chip still works on a phone that has no model.
+ */
+object TypeChange {
+    /** The types the chip lists for a note: its own zone; with the model, only types that clean (plus its own). */
+    fun offered(types: List<CaptureProfile>, noteType: String, isPrivate: Boolean, ai: Boolean): List<CaptureProfile> =
+        types.filter { it.private == isPrivate && (!ai || !it.noCleanup || it.id == noteType) }
+
+    fun cleansAgain(type: CaptureProfile, ai: Boolean): Boolean = ai && !type.noCleanup
+
+    fun header(ai: Boolean): String = if (ai) "Clean again as…" else "Change type to…"
+}
