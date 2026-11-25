@@ -22,13 +22,23 @@ object CleanupStep {
     private const val DAY = 24 * 60 * 60 * 1000L
     /** The cleanup result of a type without AI cleanup ("skipped: no AI cleanup for Exact words"). */
     const val NO_CLEANUP = "skipped: no AI cleanup for"
+    /** Made while AI cleanup was switched off in Settings: keeps its exact words for good. */
+    const val AI_OFF = "skipped: AI cleanup switched off"
 
     /** Id of the capture Gemma is cleaning right now, for the "Cleaning…" state on screen. */
     val cleaning = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
     /** Cleans every recent voice note that has not been tried yet. */
     suspend fun runPending(ctx: Context) = withContext(Dispatchers.IO) {
-        if (GemmaHolder.modelFile(ctx) == null) return@withContext
+        if (!GemmaHolder.available(ctx)) {
+            // Switched off by choice (not just no model yet): mark these notes as finished, so they are
+            // not cleaned later when AI is switched on again and never look as if they were waiting.
+            if (!org.brain.capture.Prefs(ctx).aiCleanup) {
+                val dao = CaptureDb.get(ctx).dao()
+                for (c in dao.pendingCleanup(System.currentTimeMillis() - DAY)) dao.restoreClean(c.id, null, AI_OFF)
+            }
+            return@withContext
+        }
         val dao = CaptureDb.get(ctx).dao()
         for (c in dao.pendingCleanup(System.currentTimeMillis() - DAY)) {
             val result = runCatching { clean(ctx, c) }.getOrElse { t ->
@@ -73,7 +83,7 @@ object CleanupStep {
         val note = dao.get(noteId) ?: return@withContext
         // No AI model on the phone, or a type without AI cleanup: nothing to clean with, only the type
         // changes (in the app and in the vault note's capture_type line).
-        val ai = GemmaHolder.modelFile(ctx) != null
+        val ai = GemmaHolder.available(ctx)
         if (!org.brain.capture.types.TypeChange.cleansAgain(org.brain.capture.types.Profiles.get(ctx, newType), ai)) {
             (listOf(note) + dao.additions(noteId)).forEach { dao.setType(it.id, newType) }
             if (!note.isPrivate) runCatching { retype(ctx, note, newType) }.onFailure { Log.e(TAG, "Type change in the vault failed", it) }
@@ -175,7 +185,7 @@ object CleanupStep {
      * marked as cleaned.
      */
     suspend fun cleanNow(ctx: Context, id: String) = withContext(Dispatchers.IO) {
-        if (GemmaHolder.modelFile(ctx) == null) return@withContext
+        if (!GemmaHolder.available(ctx)) return@withContext
         val dao = CaptureDb.get(ctx).dao()
         val c = dao.get(id) ?: return@withContext
         val result = runCatching { clean(ctx, c, again = true) }.getOrElse { t ->

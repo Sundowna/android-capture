@@ -96,11 +96,17 @@ object GemmaHolder {
         File(ctx.cacheDir, "gemma").deleteRecursively()
     } }
 
+    /** AI cleanup can run: a model is installed and AI cleanup is not switched off in Settings. */
+    fun available(ctx: Context): Boolean = org.brain.capture.Prefs(ctx).aiCleanup && modelFile(ctx) != null
+
+    /** Frees the loaded model now (AI cleanup switched off), instead of after the idle time. */
+    suspend fun unload() = lock.withLock { idleJob?.cancel(); engine?.close(); engine = null }
+
     fun modelName(ctx: Context): String = modelFile(ctx)?.name?.removeSuffix(".litertlm") ?: "gemma"
 
-    /** Starts loading in the background if a model is installed. */
+    /** Starts loading in the background if a model is installed and AI cleanup is on. */
     fun warm(ctx: Context) {
-        if (modelFile(ctx) == null) return
+        if (!available(ctx)) return
         scope.launch {
             // Let the capture screen finish sliding in first: the GPU load briefly stalls drawing.
             delay(WARM_DELAY_MS)

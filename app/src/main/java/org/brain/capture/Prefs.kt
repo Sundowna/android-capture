@@ -26,6 +26,11 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putString("audio", v).apply()
 
     /** The card's share button: send the voice recordings along with the note (true) or leave them out. */
+    /** AI cleanup on (default) or switched off in Settings: off works as if no model were installed. */
+    var aiCleanup: Boolean
+        get() = sp.getBoolean("ai_cleanup", true)
+        set(v) = sp.edit().putBoolean("ai_cleanup", v).apply()
+
     var shareAudio: Boolean
         get() = sp.getBoolean("share_audio", true)
         set(v) = sp.edit().putBoolean("share_audio", v).apply()

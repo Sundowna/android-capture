@@ -222,12 +222,13 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
     val additions by remember(noteId) { noteId?.let { dao.watchAdditions(it) } ?: flowOf(emptyList()) }.collectAsState(emptyList())
     val sections = remember(note, additions) { listOfNotNull(note) + additions }
     val recordingHere = recording != null && (recording?.captureId == noteId || recording?.appendTo == noteId)
-    val gemmaInstalled = remember { GemmaHolder.modelFile(ctx) != null }
+    // AI cleanup can run here: a model is installed and AI cleanup is on in Settings.
+    val gemmaInstalled = remember { GemmaHolder.available(ctx) }
     // Still being transcribed or cleaned: the note is not finished yet.
     // Typed text saved "with AI" counts too while it waits for its clean version.
     val noteBusy = sections.any { it.kind == "voice" &&
         (it.transcript == null || (it.clean == null && it.cleanup == null && gemmaInstalled && it.transcript.isNotBlank())) ||
-        it.kind == "text" && it.clean == null && it.cleanup == TextCapture.AI_PENDING }
+        it.kind == "text" && it.clean == null && it.cleanup == TextCapture.AI_PENDING && gemmaInstalled }
     // Adding to the note on screen: only once it is saved, and not to private notes (they never touch the vault).
     val canAdd = note?.state == CaptureStates.SAVED && note?.isPrivate == false && !undone
     // Editing the note on screen: once it is finished, and not while recording, transcribing or cleaning.
@@ -339,7 +340,8 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
         if (userPickedView) return@LaunchedEffect
         val l = last
         // A type without AI cleanup stays on the exact words: there is no clean version coming.
-        val noAi = Profiles.get(ctx, note?.type ?: l?.type).noCleanup
+        // So does a note while AI cleanup is off (or no model), unless it already has a clean version.
+        val noAi = Profiles.get(ctx, note?.type ?: l?.type).noCleanup || !gemmaInstalled && l?.clean == null
         when {
             l == null || recordingHere || noAi -> view = View.Raw
             l.id in watched -> if (typedDone == l.id && !l.transcript.isNullOrBlank()) { delay(1000); view = View.Clean } else view = View.Raw
@@ -399,10 +401,16 @@ fun CaptureScreen(request: CaptureRequest?, onClose: () -> Unit, buttonModifier:
                     note?.let { NoteTypeChip(it) }
                 }
             } else if (mode == CaptureActivity.MODE_VOICE) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // Left to right in the order they happen: the exact words first, then the clean version.
-                    ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
-                    ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
+                // Without AI cleanup (switched off, or no model) there is no Clean tab, unless the note
+                // already has a clean version from before.
+                val showTabs = gemmaInstalled || sections.any { it.clean != null }
+                Row(Modifier.heightIn(min = 44.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (showTabs) {
+                        // Left to right in the order they happen: the exact words first, then the clean version.
+                        ViewTab("Exactly what I said", "instant via Whisper", view == View.Raw) { view = View.Raw; userPickedView = true }
+                        ViewTab("Clean", if (private) "on this phone" else "via AI", view == View.Clean) { view = View.Clean; userPickedView = true }
+                    } else Text(if (Photos.isPhoto(note)) "Photo" else "Voice note", fontFamily = Grotesk,
+                        fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Ink.Text)
                     Spacer(Modifier.weight(1f))
                     val n = note
                     if (zoneTypes.size > 1 && (n == null || recordingHere && recording?.appendTo == null))
@@ -686,7 +694,9 @@ private fun Section(
             Text(transcript, tap, fontSize = 15.sp, lineHeight = 24.sp, color = Ink.TextBody)
             Text(when {
                 c.cleanup?.startsWith(CleanupStep.NO_CLEANUP) == true -> "Exact words, as you chose: this type has no AI cleanup."
+                c.cleanup == CleanupStep.AI_OFF -> "Exact words: AI cleanup was off when you made this note."
                 gemmaInstalled -> "Kept your exact words: the clean version didn't pass the check."
+                !org.brain.capture.Prefs(LocalContext.current).aiCleanup -> "AI cleanup is off in Settings."
                 else -> "No cleanup model on this phone yet."
             }, fontSize = 12.sp, color = Ink.TextDim)
         }
@@ -1065,7 +1075,7 @@ private fun TextCard(mode: String, private: Boolean, typeId: String, appendTo: C
         }, fontSize = 12.sp, color = Ink.TextDim)
         // Two ways to save: tidied by the AI with the note's type, or exactly as typed (fastest).
         // Without the AI model on the phone there is only the plain save.
-        val aiAvailable = remember { GemmaHolder.modelFile(ctx) != null }
+        val aiAvailable = remember { GemmaHolder.available(ctx) }
         var savingAi by remember { mutableStateOf<Boolean?>(null) }
         fun save(ai: Boolean) {
             busy = true; error = null; savingAi = ai

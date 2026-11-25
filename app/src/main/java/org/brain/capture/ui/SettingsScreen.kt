@@ -50,6 +50,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.brain.capture.Prefs
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import org.brain.capture.Housekeeping
 import org.brain.capture.transcribe.ModelStore
 
@@ -102,7 +104,8 @@ private fun Menu(open: (Page) -> Unit) {
         Page.Types to "${types.size} types · default ${org.brain.capture.types.Profiles.primary(ctx).name}",
         Page.Widget to types.filter { it.onWidget }.joinToString(", ") { it.name }.ifEmpty { "No buttons" },
         Page.Vault to listOfNotNull(prefs.vaultUri?.lastPathSegment?.substringAfter(':')?.substringAfterLast('/') ?: "Not selected", prefs.inboxFolder).joinToString(" · "),
-        Page.Transcription to (if (ModelStore(ctx).isInstalled()) "Whisper small" else "Model not installed") + " · " + language,
+        Page.Transcription to (if (ModelStore(ctx).isInstalled()) "Whisper small" else "Model not installed") + " · " + language +
+            (if (!prefs.aiCleanup && org.brain.capture.cleanup.GemmaHolder.modelFile(ctx) != null) " · AI off" else ""),
         Page.Display to (if (prefs.audioFormat == "wav") "WAV" else "Opus") + " · ${prefs.cardCount} notes shown" +
             (if (prefs.shareAudio) "" else " · share without recording"),
         Page.Storage to (storage?.let { android.text.format.Formatter.formatShortFileSize(ctx, it) + " on this phone" } ?: "…"),
@@ -291,6 +294,18 @@ fun GemmaSetup() {
     SetupLine("AI cleanup model", if (f != null) "${f.name.removeSuffix(".litertlm")} · ${android.text.format.Formatter.formatShortFileSize(ctx, f.length())}"
         else "Not installed: notes keep your exact words") {
         if (f != null) OutlinedButton(enabled = progress == -1f, onClick = { pick.launch(arrayOf("*/*")) }) { Text("Replace") }
+    }
+    // Switch AI cleanup off without removing the model: then nothing is cleaned or loaded, and the
+    // note screen drops its Clean tab and "Save with AI" (as without a model).
+    if (f != null) {
+        val prefs = remember { Prefs(ctx) }
+        var aiOn by remember { mutableStateOf(prefs.aiCleanup) }
+        SetupLine("AI cleanup", if (aiOn) "On: notes are tidied into bullets" else "Off: notes keep your exact words") {
+            androidx.compose.material3.Switch(checked = aiOn, onCheckedChange = {
+                aiOn = it; prefs.aiCleanup = it; done = null // the import message would contradict "Off"
+                if (!it) scope.launch { org.brain.capture.cleanup.GemmaHolder.unload() }
+            }, modifier = Modifier.semantics { contentDescription = "AI cleanup" })
+        }
     }
     ModelAdvice(showDownloads = f == null) { error = it }
     if (f == null) {
